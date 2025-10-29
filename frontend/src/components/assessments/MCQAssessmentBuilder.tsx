@@ -32,9 +32,20 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
   const [showModal, setShowModal] = useState(false);
   const [editingQuestion, setEditingQuestion] = useState<MCQQuestion | null>(null);
 
+  // Question Bank state
+  const [banks, setBanks] = useState<{ id: string; name: string }[]>([]);
+  const [selectedBank, setSelectedBank] = useState<string>('');
+  const [importMode, setImportMode] = useState<'random'|'manual'>('random');
+  const [importCount, setImportCount] = useState<number>(10);
+
   useEffect(() => {
     fetchQuestions();
+    fetchBanks();
   }, [assessment.id]);
+
+  async function fetchBanks() {
+    try { setBanks(await api.get<any[]>(`/mcq-banks`)); } catch {}
+  }
 
   async function fetchQuestions() {
     setLoading(true);
@@ -67,7 +78,7 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
       <div className="mb-6">
         <button
           onClick={onBack}
-          className="text-blue-600 hover:text-blue-700 flex items-center gap-1 mb-2"
+          className="text-indigo-600 hover:text-indigo-700 flex items-center gap-1 mb-2"
         >
           ← Back to Assessments
         </button>
@@ -76,14 +87,32 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
       </div>
 
       <div className="flex justify-between items-center mb-4">
-        <button
-          onClick={openCreateModal}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition"
-        >
-          <Plus className="w-5 h-5" />
-          Add Question
-        </button>
-        <BulkUpload assessmentId={assessment.id} onDone={fetchQuestions} />
+        <div className="flex items-center gap-2">
+          <button
+            onClick={openCreateModal}
+            className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg transition"
+          >
+            <Plus className="w-5 h-5" />
+            Add Question
+          </button>
+          <BulkUpload assessmentId={assessment.id} onDone={fetchQuestions} />
+        </div>
+        <div className="flex items-center gap-2">
+          <select value={selectedBank} onChange={(e)=>setSelectedBank(e.target.value)} className="px-2 py-1 border rounded">
+            <option value="">Select Question Bank</option>
+            {banks.map(b=> (<option key={b.id} value={b.id}>{b.name}</option>))}
+          </select>
+          <select value={importMode} onChange={(e)=>setImportMode(e.target.value as any)} className="px-2 py-1 border rounded">
+            <option value="random">Random</option>
+            <option value="manual" disabled>Manual (soon)</option>
+          </select>
+          <input type="number" min={1} value={importCount} onChange={(e)=>setImportCount(parseInt(e.target.value)||1)} className="w-20 px-2 py-1 border rounded" />
+          <button disabled={!selectedBank}
+            onClick={async ()=>{ await api.post(`/assessments/${assessment.id}/from-bank`, { bank_id: selectedBank, mode: importMode, count: importCount }); await fetchQuestions(); }}
+            className="px-3 py-1.5 border rounded hover:bg-gray-50 disabled:opacity-50">
+            Import
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -97,7 +126,7 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
               <div className="flex justify-between items-start mb-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-3 mb-2">
-                    <span className="bg-blue-100 text-blue-600 font-bold px-3 py-1 rounded">
+                    <span className="bg-indigo-100 text-indigo-600 font-bold px-3 py-1 rounded">
                       Q{index + 1}
                     </span>
                     {question.difficulty && (

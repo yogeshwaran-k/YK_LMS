@@ -139,7 +139,7 @@ export default function AssessmentManagement() {
         <div className="bg-white rounded-lg shadow p-4">
           <h2 className="font-semibold text-gray-900 mb-3">Select Course</h2>
           {loading && !selectedCourse ? (
-            <Loader2 className="w-6 h-6 animate-spin text-blue-600 mx-auto" />
+            <Loader2 className="w-6 h-6 animate-spin text-indigo-600 mx-auto" />
           ) : (
             <div className="space-y-2">
               {courses.map((course) => (
@@ -152,7 +152,7 @@ export default function AssessmentManagement() {
                   }}
                   className={`w-full text-left px-3 py-2 rounded-lg transition ${
                     selectedCourse?.id === course.id
-                      ? 'bg-blue-50 text-blue-600 font-medium'
+                      ? 'bg-indigo-50 text-indigo-600 font-medium'
                       : 'hover:bg-gray-50 text-gray-700'
                   }`}
                 >
@@ -176,7 +176,7 @@ export default function AssessmentManagement() {
                   onClick={() => setSelectedModule(module)}
                   className={`w-full text-left px-3 py-2 rounded-lg transition ${
                     selectedModule?.id === module.id
-                      ? 'bg-blue-50 text-blue-600 font-medium'
+                      ? 'bg-indigo-50 text-indigo-600 font-medium'
                       : 'hover:bg-gray-50 text-gray-700'
                   }`}
                 >
@@ -206,7 +206,7 @@ export default function AssessmentManagement() {
           </div>
           {selectedModule ? (
             loading ? (
-              <Loader2 className="w-6 h-6 animate-spin text-blue-600 mx-auto" />
+              <Loader2 className="w-6 h-6 animate-spin text-indigo-600 mx-auto" />
             ) : (
               <div className="space-y-2">
                 {assessments.map((assessment) => {
@@ -234,7 +234,7 @@ export default function AssessmentManagement() {
                         <div className="flex gap-2">
                           <button
                             onClick={() => setSelectedAssessment(assessment)}
-                            className="text-blue-600 hover:text-blue-900"
+                            className="text-indigo-600 hover:text-indigo-900"
                             title="Open builder"
                           >
                             <ChevronRight className="w-4 h-4" />
@@ -311,6 +311,8 @@ function AssessmentModal({ moduleId, assessment, onClose, onSuccess }: Assessmen
     end_at: '',
     allowed_attempts: 1,
     resume_limit: 0,
+    results_release_at: '',
+    results_force_enabled: false,
     deadline: assessment?.deadline || '',
   });
   const [loading, setLoading] = useState(false);
@@ -337,6 +339,8 @@ function AssessmentModal({ moduleId, assessment, onClose, onSuccess }: Assessmen
         end_at: formData.end_at ? new Date(formData.end_at).toISOString() : null,
         allowed_attempts: formData.allowed_attempts,
         resume_limit: formData.resume_limit,
+        results_release_at: formData.results_release_at ? new Date(formData.results_release_at).toISOString() : null,
+        results_force_enabled: formData.results_force_enabled,
         deadline: formData.deadline || null,
       };
 
@@ -501,6 +505,22 @@ function AssessmentModal({ moduleId, assessment, onClose, onSuccess }: Assessmen
               <input type="number" min={0} value={(formData as any).resume_limit}
                 onChange={(e)=> setFormData({ ...formData, resume_limit: parseInt(e.target.value)||0 } as any)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Analysis Release At (optional)</label>
+              <input type="datetime-local" value={(formData as any).results_release_at}
+                onChange={(e)=> setFormData({ ...formData, results_release_at: e.target.value } as any)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
+            </div>
+            <div className="flex items-end">
+              <label className="inline-flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={(formData as any).results_force_enabled}
+                  onChange={(e)=> setFormData({ ...formData, results_force_enabled: e.target.checked } as any)} />
+                <span>Enable Analysis Now</span>
+              </label>
             </div>
           </div>
 

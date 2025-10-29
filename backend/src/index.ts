@@ -40,6 +40,8 @@ import mcqBulkRoutes from './routes/mcq_bulk.routes';
 app.use('/assessments', mcqBulkRoutes);
 import submissionsRoutes from './routes/submissions.routes';
 app.use('/submissions', submissionsRoutes);
+import mcqBankRoutes from './routes/mcq_bank.routes';
+app.use('/', mcqBankRoutes);
 import groupsRoutes from './routes/groups.routes';
 app.use('/groups', groupsRoutes);
 

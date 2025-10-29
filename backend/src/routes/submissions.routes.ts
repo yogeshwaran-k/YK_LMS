@@ -26,12 +26,39 @@ router.post('/', async (req, res) => {
   if (!courseId) return res.status(404).json({ error: 'Assessment not found' });
   const ok = await ensureCourseAccessOr403(req, res, courseId);
   if (!ok) return;
+
+  // Enforce attempts and window and duration
+  const userId = req.user!.sub;
+  const now = new Date();
+  const { getEffectiveAssessmentSettings, withinWindow } = await import('../utils/assessments');
+  const settings = await getEffectiveAssessmentSettings(parsed.data.assessment_id, userId);
+  if (!settings) return res.status(404).json({ error: 'Assessment not found' });
+  if (!withinWindow(now, settings.start_at, settings.end_at)) return res.status(403).json({ error: 'Window closed' });
+  if (settings.duration_minutes && parsed.data.started_at && parsed.data.elapsed_seconds != null) {
+    const startedAt = new Date(parsed.data.started_at);
+    const elapsed = Number(parsed.data.elapsed_seconds || 0);
+    const diff = (now.getTime() - startedAt.getTime()) / 1000; // seconds wall-clock
+    const maxSeconds = (settings.duration_minutes * 60) + 5; // small grace
+    if (elapsed > maxSeconds || diff > maxSeconds + 30) {
+      return res.status(403).json({ error: 'Duration exceeded' });
+    }
+  }
+
   const { data, error } = await supabaseAdmin
     .from('submissions')
-    .insert([{ user_id: req.user!.sub, ...parsed.data }])
+    .insert([{ user_id: userId, ...parsed.data }])
     .select()
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
+
+  // Force-stop any active sessions for this assessment/user to prevent further resumes
+  await supabaseAdmin
+    .from('assessment_sessions')
+    .update({ status: 'completed', ended_at: new Date().toISOString() })
+    .eq('user_id', userId)
+    .eq('assessment_id', parsed.data.assessment_id)
+    .eq('status', 'active');
+
   res.status(201).json(data);
 });
 
@@ -52,11 +79,31 @@ router.get('/mine', async (req, res) => {
   if (!assessment_id) return res.status(400).json({ error: 'assessment_id required' });
   const { data, error } = await supabaseAdmin
     .from('submissions')
-    .select('id,created_at')
+    .select('id,created_at,score')
     .eq('user_id', req.user!.sub)
-    .eq('assessment_id', assessment_id);
+    .eq('assessment_id', assessment_id)
+    .order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ count: data?.length || 0 });
+  const count = data?.length || 0;
+  const latest = data && data[0] ? { score: data[0].score ?? null, created_at: data[0].created_at } : null;
+  res.json({ count, latest });
+});
+
+// Latest submission with payload for current user
+router.get('/mine/latest', async (req, res) => {
+  const assessment_id = req.query.assessment_id as string | undefined;
+  if (!assessment_id) return res.status(400).json({ error: 'assessment_id required' });
+  const { data, error } = await supabaseAdmin
+    .from('submissions')
+    .select('*')
+    .eq('user_id', req.user!.sub)
+    .eq('assessment_id', assessment_id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'No submissions' });
+  res.json(data);
 });
 
 export default router;

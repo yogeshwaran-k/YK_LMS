@@ -8,24 +8,157 @@ interface CodingQ { id: string; title: string; description: string; starter_code
 interface TestCase { id: string; input: string; expected_output: string; is_hidden: boolean; weightage: number }
 interface Assignment { id: string; title: string; description: string; max_file_size_mb: number; allowed_file_types: string[]; deadline: string | null }
 
-export default function StudentAssessmentView({ assessment, onBack }: { assessment: Assessment & { allowed_languages?: string[] }; onBack: () => void }) {
-  if (assessment.type === 'mcq') return <MCQRunner assessment={assessment} onBack={onBack} />;
+export default function StudentAssessmentView({ assessment, onBack, analysis }: { assessment: Assessment & { allowed_languages?: string[] }; onBack: () => void; analysis?: boolean }) {
+  if (assessment.type === 'mcq') return <MCQRunner assessment={assessment} onBack={onBack} analysis={analysis} />;
   if (assessment.type === 'coding') return <CodingRunner assessment={assessment} onBack={onBack} />;
   return <AssignmentView assessment={assessment} onBack={onBack} />;
 }
 
-function MCQRunner({ assessment, onBack }: { assessment: Assessment & { show_results_immediately?: boolean; allowed_attempts?: number }; onBack: () => void }) {
+function MCQRunner({ assessment, onBack, analysis }: { assessment: Assessment & { show_results_immediately?: boolean; allowed_attempts?: number }; onBack: () => void; analysis?: boolean }) {
   const [questions, setQuestions] = useState<MCQ[]>([]);
   const [answers, setAnswers] = useState<Record<string, 'a'|'b'|'c'|'d'|undefined>>({});
   const [idx, setIdx] = useState(0);
   const [attempts, setAttempts] = useState(0);
-  const [view, setView] = useState<'test'|'result'|'analysis'>('test');
+  const [view, setView] = useState<'test'|'result'|'analysis'|'ineligible'>(analysis ? 'analysis' : 'test');
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [timeLeft, setTimeLeft] = useState<number>(0);
+  const startedAt = useRef<number | null>(null);
+  const [eligibilityMsg, setEligibilityMsg] = useState<string>('');
 
-  useEffect(() => { (async () => { const qs = await api.get<MCQ[]>(`/assessments/${assessment.id}/mcq-questions`); setQuestions(qs); })(); (async ()=>{ const m = await api.get<{count:number}>(`/submissions/mine?assessment_id=${assessment.id}`); setAttempts(m.count || 0); })(); }, [assessment.id]);
+  // 15s warmup timebar overlay
+  const [warmup, setWarmup] = useState<{ active: boolean; progress: number }>({ active: !analysis, progress: 0 });
+
+  useEffect(() => { (async () => {
+    if (analysis) {
+      // Analysis mode: load questions and latest submission to show answers
+      const qs = await api.get<MCQ[]>(`/assessments/${assessment.id}/mcq-questions`);
+      setQuestions(qs);
+      const m = await api.get<{count:number}>(`/submissions/mine?assessment_id=${assessment.id}`);
+      setAttempts(m.count || 0);
+      try {
+        const latest = await api.get<any>(`/submissions/mine/latest?assessment_id=${assessment.id}`);
+        const a = latest?.payload?.answers || {};
+        setAnswers(a);
+      } catch {}
+      return;
+    }
+
+    const warmupMs = 15000; const start = Date.now();
+    let dataReady = false; let timer: any;
+    // progress loop
+    timer = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const pct = Math.min(100, Math.floor((elapsed / warmupMs) * 100));
+      setWarmup(w => ({ active: true, progress: pct }));
+      if (elapsed >= warmupMs && dataReady) { clearInterval(timer); setWarmup({ active: false, progress: 100 }); }
+    }, 100);
+
+    // Check eligibility and start/resume session while warmup runs
+    try {
+      const e = await api.get<any>(`/assessments/${assessment.id}/eligibility`);
+      const reasons: string[] = Array.isArray(e?.reasons) ? e.reasons : [];
+      if (!e.eligible) {
+        // If resume exceeded but attempts remain, start a new attempt automatically
+        if (reasons.includes('resume_count_exceeded') && e.attempts && e.attempts.used < e.attempts.allowed) {
+          const s = await api.post<any>(`/assessments/${assessment.id}/start`).catch(()=>null);
+          if (s?.id) {
+            setSessionId(s.id);
+            setTimeLeft(Math.max(1, (assessment as any).duration_minutes || 60) * 60);
+            startedAt.current = Date.now();
+          } else {
+            const map: Record<string,string> = {
+              before_start: 'Start Time is at',
+              after_end: 'The End has end at',
+              attempts_exhausted: 'Attempts Exhausted',
+              resume_count_exceeded: 'Resume Count Exceeded',
+              time_frame_expired: 'Time frame expired',
+              active_session_exists: 'Active session exists',
+              not_found: 'Not eligible',
+            };
+            setEligibilityMsg(reasons.map(r=>map[r]||r).join(' | ') || 'Not eligible');
+            setView('ineligible');
+            clearInterval(timer); setWarmup({ active: false, progress: 100 });
+            return;
+          }
+        } else {
+          const map: Record<string,string> = {
+            before_start: 'Start Time is at',
+            after_end: 'The End has end at',
+            attempts_exhausted: 'Attempts Exhausted',
+            resume_count_exceeded: 'Resume Count Exceeded',
+            time_frame_expired: 'Time frame expired',
+            active_session_exists: 'Active session exists',
+            not_found: 'Not eligible',
+          };
+          setEligibilityMsg(reasons.map(r=>map[r]||r).join(' | ') || 'Not eligible');
+          setView('ineligible');
+          clearInterval(timer); setWarmup({ active: false, progress: 100 });
+          return;
+        }
+      }
+      if (e.can_resume && e.session_id) {
+        await api.post(`/assessments/${assessment.id}/sessions/${e.session_id}/resume`);
+        setSessionId(e.session_id);
+        setTimeLeft(e.remaining_seconds ?? ((assessment as any).duration_minutes||60)*60);
+        startedAt.current = Date.now() - (((assessment as any).duration_minutes||60)*60 - (e.remaining_seconds||0))*1000;
+      } else if (e.can_start) {
+        const s = await api.post<any>(`/assessments/${assessment.id}/start`);
+        setSessionId(s.id);
+        setTimeLeft(Math.max(1, (assessment as any).duration_minutes || 60) * 60);
+        startedAt.current = Date.now();
+      }
+      // Load questions and attempts behind the timebar
+      const qs = await api.get<MCQ[]>(`/assessments/${assessment.id}/mcq-questions`);
+      setQuestions(qs);
+      const m = await api.get<{count:number}>(`/submissions/mine?assessment_id=${assessment.id}`);
+      setAttempts(m.count || 0);
+      dataReady = true;
+      const elapsed = Date.now() - start;
+      if (elapsed >= warmupMs) { clearInterval(timer); setWarmup({ active: false, progress: 100 }); }
+    } catch (err:any) {
+      setEligibilityMsg(err?.message || 'Not eligible');
+      setView('ineligible');
+      clearInterval(timer); setWarmup({ active: false, progress: 100 });
+      return;
+    }
+  })(); }, [assessment.id, analysis]);
+
+  useEffect(() => {
+    if (timeLeft <= 0) return;
+    const t = setInterval(() => setTimeLeft((s)=> (s>0? s-1: 0)), 1000);
+    return () => clearInterval(t);
+  }, [timeLeft]);
+
+  useEffect(() => { if (sessionId && timeLeft === 0 && view==='test') void autoSubmit(); }, [timeLeft, sessionId, view]);
+
+  async function autoSubmit(){
+    try {
+      const payload = { answers, autoTimeout: true };
+      const s = score();
+      await api.post('/submissions', { assessment_id: assessment.id, type: 'mcq', score: s, payload, started_at: startedAt.current ? new Date(startedAt.current).toISOString(): undefined, elapsed_seconds: startedAt.current ? Math.round((Date.now()-startedAt.current)/1000) : undefined });
+      if (sessionId) await api.post(`/assessments/${assessment.id}/sessions/${sessionId}/finish`);
+    } catch (e:any) {
+      // Graceful fallback if assessment missing
+    } finally {
+      setView('result');
+    }
+  }
 
   function score() {
     let s = 0; for (const q of questions) if (answers[q.id] === q.correct_option) s += q.marks;
     return s;
+  }
+
+  if (view==='ineligible') {
+    return (
+      <div>
+        <div className="mb-4">
+          <button onClick={onBack} className="text-indigo-600 hover:text-indigo-700">← Back</button>
+          <h2 className="text-2xl font-bold text-gray-900">{assessment.title}</h2>
+        </div>
+        <div className="bg-yellow-50 border border-yellow-200 text-yellow-800 p-4 rounded">{eligibilityMsg}</div>
+      </div>
+    );
   }
 
   if (attempts >= (assessment.allowed_attempts || 1) && view==='test') {
@@ -44,7 +177,7 @@ function MCQRunner({ assessment, onBack }: { assessment: Assessment & { show_res
     return (
       <div>
         <div className="mb-4">
-          <button onClick={onBack} className="text-blue-600 hover:text-blue-700">← Home</button>
+          <button onClick={onBack} className="text-indigo-600 hover:text-indigo-700">← Home</button>
           <h2 className="text-2xl font-bold text-gray-900">{assessment.title} - Result</h2>
         </div>
         {assessment.show_results_immediately ? (
@@ -67,7 +200,7 @@ function MCQRunner({ assessment, onBack }: { assessment: Assessment & { show_res
     return (
       <div>
         <div className="mb-4">
-          <button onClick={onBack} className="text-blue-600 hover:text-blue-700">← Home</button>
+          <button onClick={onBack} className="text-indigo-600 hover:text-indigo-700">← Home</button>
           <h2 className="text-2xl font-bold text-gray-900">{assessment.title} - Analysis</h2>
         </div>
         <div className="bg-white rounded-lg shadow p-6 mb-4">
@@ -91,12 +224,28 @@ function MCQRunner({ assessment, onBack }: { assessment: Assessment & { show_res
   const q = questions[idx];
   return (
     <div>
+      {warmup.active && !analysis && (
+        <div className="fixed inset-0 bg-white/95 z-50 flex items-center justify-center">
+          <div className="w-full max-w-md px-6">
+            <div className="text-center mb-4">
+              <div className="text-lg font-semibold text-gray-900">Preparing your test…</div>
+              <div className="text-sm text-gray-500">Please wait while we set things up</div>
+            </div>
+            <div className="w-full bg-gray-200 rounded h-2 overflow-hidden">
+              <div className="bg-indigo-600 h-2 transition-all" style={{ width: `${warmup.progress}%` }} />
+            </div>
+          </div>
+        </div>
+      )}
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <button onClick={onBack} className="text-blue-600 hover:text-blue-700">← Back</button>
+          <button onClick={async ()=>{ if (sessionId) { try { await api.post(`/assessments/${assessment.id}/sessions/${sessionId}/finish`);} catch{} } onBack(); }} className="text-indigo-600 hover:text-indigo-700">← Back</button>
           <h2 className="text-2xl font-bold text-gray-900">{assessment.title}</h2>
         </div>
-        <div className="text-sm text-gray-600">Attempt {attempts+1} / {assessment.allowed_attempts || 1}</div>
+        <div className="text-sm text-gray-600 flex items-center gap-4">
+          <span>Attempt {attempts+1} / {assessment.allowed_attempts || 1}</span>
+          <span>Time left: <span className={`${timeLeft <= Math.max(1, ((assessment as any).duration_minutes||60)*60)*0.1 ? 'text-red-600 font-semibold' : ''}`}>{formatTime(timeLeft)}</span></span>
+        </div>
       </div>
 
       {q && (
@@ -115,7 +264,7 @@ function MCQRunner({ assessment, onBack }: { assessment: Assessment & { show_res
         <button disabled={idx===0} onClick={()=>setIdx(i=>Math.max(0,i-1))} className="px-3 py-1.5 border rounded disabled:opacity-50">Prev</button>
         <button disabled={idx>=questions.length-1} onClick={()=>setIdx(i=>Math.min(questions.length-1,i+1))} className="px-3 py-1.5 border rounded disabled:opacity-50">Next</button>
         <div className="flex-1" />
-        <button onClick={async ()=>{ await api.post('/submissions', { assessment_id: assessment.id, type: 'mcq', score: score(), payload: { answers } }); setView('result'); }} className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">Submit Test</button>
+        <button disabled={timeLeft===0} onClick={async ()=>{ await api.post('/submissions', { assessment_id: assessment.id, type: 'mcq', score: score(), payload: { answers }, started_at: startedAt.current ? new Date(startedAt.current).toISOString(): undefined, elapsed_seconds: startedAt.current ? Math.round((Date.now()-startedAt.current)/1000) : undefined }); if (sessionId) await api.post(`/assessments/${assessment.id}/sessions/${sessionId}/finish`); onBack(); }} className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50">Submit Test</button>
       </div>
     </div>
   );
@@ -135,16 +284,68 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
   const [lastSubmitRows, setLastSubmitRows] = useState<typeof resultsRows | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [language, setLanguage] = useState<'javascript'|'python'|'cpp'|'c'|'java'|'typescript'>( ((assessment as any).allowed_languages?.[0]) || 'javascript');
-  const [timeLeft, setTimeLeft] = useState<number>(Math.max(1, (assessment as any).duration_minutes || 60) * 60);
-  const startedAt = useRef<number>(Date.now());
+  const [timeLeft, setTimeLeft] = useState<number>(0);
+  const startedAt = useRef<number | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
   const codeKey = `code_${assessment.id}`;
 
-  useEffect(() => { (async () => { const qs = await api.get<CodingQ[]>(`/assessments/${assessment.id}/coding-questions`); setQuestions(qs); if (qs[0]) setSelected(qs[0]); })(); const saved = localStorage.getItem(codeKey); if (saved) setCode(saved); }, [assessment.id]);
+  useEffect(() => { (async () => {
+    // Eligibility and start/resume
+    try {
+      const e = await api.get<any>(`/assessments/${assessment.id}/eligibility`);
+      if (!e.eligible) throw new Error(e.reasons?.join(', ') || 'Not eligible');
+      if (e.can_resume && e.session_id) {
+        await api.post(`/assessments/${assessment.id}/sessions/${e.session_id}/resume`);
+        sessionIdRef.current = e.session_id;
+        setTimeLeft(e.remaining_seconds ?? ((assessment as any).duration_minutes||60)*60);
+        startedAt.current = Date.now() - (((assessment as any).duration_minutes||60)*60 - (e.remaining_seconds||0))*1000;
+      } else if (e.can_start) {
+        const s = await api.post<any>(`/assessments/${assessment.id}/start`);
+        sessionIdRef.current = s.id;
+        setTimeLeft(Math.max(1, (assessment as any).duration_minutes || 60) * 60);
+        startedAt.current = Date.now();
+      }
+    } catch (err:any) {
+      alert(`Not eligible: ${err?.message || 'Unknown'}`);
+      onBack();
+      return;
+    }
+
+    const qs = await api.get<CodingQ[]>(`/assessments/${assessment.id}/coding-questions`);
+    setQuestions(qs);
+    if (qs[0]) setSelected(qs[0]);
+    const saved = localStorage.getItem(codeKey); if (saved) setCode(saved);
+  })(); }, [assessment.id]);
   useEffect(() => {
+    if (timeLeft <= 0) return;
     const t = setInterval(() => setTimeLeft((s)=> (s>0? s-1: 0)), 1000);
     return () => clearInterval(t);
-  }, []);
+  }, [timeLeft]);
   useEffect(() => { (async () => { if (selected) { const t = await api.get<TestCase[]>(`/assessments/coding-questions/${selected.id}/test-cases`); setTests(t); } })(); }, [selected?.id]);
+  useEffect(() => { if (sessionIdRef.current && startedAt.current && timeLeft===0) void autoSubmitCoding(); }, [timeLeft]);
+
+  async function autoSubmitCoding() {
+    // Auto-submit on timeout using last known results if any
+    try {
+      const rows = lastSubmitRows || [];
+      const score = rows.filter(r=>r.status==='Pass').length;
+      await api.post('/submissions', {
+        assessment_id: assessment.id,
+        type: 'coding',
+        payload: { code, language, report: rows, autoTimeout: true },
+        score,
+        started_at: startedAt.current ? new Date(startedAt.current).toISOString(): undefined,
+        elapsed_seconds: startedAt.current ? Math.round((Date.now()-(startedAt.current))/1000) : undefined,
+        question_ids: questions.map(q=>q.id)
+      });
+      if (sessionIdRef.current) await api.post(`/assessments/${assessment.id}/sessions/${sessionIdRef.current}/finish`);
+    } catch (e:any) {
+      // ignore submit error
+    } finally {
+      alert('Time expired! Auto-submitted.');
+      onBack();
+    }
+  }
 
   return (
     <div>
@@ -206,7 +407,7 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
                       const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin });
                       setStdout(res.stdout || '');
                     }} className="px-3 py-1.5 border rounded hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600">Run</button>
-                    <button onClick={async ()=>{
+<button disabled={isRunning || timeLeft===0} onClick={async ()=>{
                       setIsRunning(true);
                       setResultsOpen(true);
                       const all = tests.filter(t=>!t.is_hidden);
@@ -224,8 +425,8 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
                       setResultsRows(rows);
                       setResultsOpen(true);
                       setIsRunning(false);
-                    }} disabled={isRunning} className="px-3 py-1.5 border rounded hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600 disabled:opacity-50">Run Test</button>
-                    <button onClick={async ()=>{
+                    }} className="px-3 py-1.5 border rounded hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600 disabled:opacity-50">Run Test</button>
+<button disabled={isRunning || timeLeft===0} onClick={async ()=>{
                       setIsRunning(true);
                       setResultsOpen(true);
                       const samples = tests.filter(t=>!t.is_hidden);
@@ -253,13 +454,14 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
                       setLastSubmitRows(rows);
                       setResultsOpen(true);
                       setIsRunning(false);
-                    }} disabled={isRunning} className="px-3 py-1.5 border rounded hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600 disabled:opacity-50">Submit Project</button>
+                    }} className="px-3 py-1.5 border rounded hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600 disabled:opacity-50">Submit Project</button>
                     <button onClick={async ()=>{
                       if (!lastSubmitRows) return;
                       const score = lastSubmitRows.filter(r=>r.status==='Pass').length;
-                      await api.post('/submissions', { assessment_id: assessment.id, type: 'coding', payload: { code, language, report: lastSubmitRows }, score, started_at: new Date(startedAt.current).toISOString(), elapsed_seconds: Math.round((Date.now()-startedAt.current)/1000), question_ids: questions.map(q=>q.id) });
+                      await api.post('/submissions', { assessment_id: assessment.id, type: 'coding', payload: { code, language, report: lastSubmitRows }, score, started_at: startedAt.current ? new Date(startedAt.current).toISOString(): undefined, elapsed_seconds: startedAt.current ? Math.round((Date.now()-(startedAt.current))/1000) : undefined, question_ids: questions.map(q=>q.id) });
+                      if (sessionIdRef.current) await api.post(`/assessments/${assessment.id}/sessions/${sessionIdRef.current}/finish`);
                       onBack();
-                    }} disabled={!lastSubmitRows} className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Submit Test</button>
+                    }} disabled={!lastSubmitRows || timeLeft===0} className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Submit Test</button>
                   </div>
                 </div>
                 <div className="p-3 bg-gray-50 dark:bg-[#0f172a]">
