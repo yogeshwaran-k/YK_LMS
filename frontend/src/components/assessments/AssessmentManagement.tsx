@@ -296,6 +296,9 @@ interface AssessmentModalProps {
 }
 
 function AssessmentModal({ moduleId, assessment, onClose, onSuccess }: AssessmentModalProps) {
+  const defaultSettings = (() => {
+    try { return JSON.parse(localStorage.getItem('app_settings')||'{}'); } catch { return {}; }
+  })();
   const [formData, setFormData] = useState({
     title: assessment?.title || '',
     type: assessment?.type || 'mcq' as 'mcq' | 'coding' | 'assignment',
@@ -303,17 +306,20 @@ function AssessmentModal({ moduleId, assessment, onClose, onSuccess }: Assessmen
     duration_minutes: assessment?.duration_minutes || 60,
     total_marks: assessment?.total_marks || 100,
     passing_marks: assessment?.passing_marks || 40,
-    randomize_questions: false,
-    enable_negative_marking: false,
-    negative_marks_per_question: 0,
-    show_results_immediately: true,
-    start_at: '',
-    end_at: '',
-    allowed_attempts: 1,
-    resume_limit: 0,
-    results_release_at: '',
-    results_force_enabled: false,
+    randomize_questions: assessment ? (assessment as any).randomize_questions ?? false : false,
+    enable_negative_marking: assessment ? (assessment as any).enable_negative_marking ?? false : false,
+    negative_marks_per_question: assessment ? (assessment as any).negative_marks_per_question ?? 0 : 0,
+    show_results_immediately: assessment ? (assessment as any).show_results_immediately ?? true : true,
+    start_at: assessment && (assessment as any).start_at ? new Date((assessment as any).start_at as any).toISOString().slice(0,16) : '',
+    end_at: assessment && (assessment as any).end_at ? new Date((assessment as any).end_at as any).toISOString().slice(0,16) : '',
+    allowed_attempts: assessment ? ((assessment as any).allowed_attempts ?? 1) : 1,
+    resume_limit: assessment ? ((assessment as any).resume_limit ?? 0) : 0,
+    results_release_at: assessment && (assessment as any).results_release_at ? new Date((assessment as any).results_release_at as any).toISOString().slice(0,16) : '',
+    results_force_enabled: assessment ? ((assessment as any).results_force_enabled ?? false) : false,
     deadline: assessment?.deadline || '',
+    disable_copy_paste: (defaultSettings.disable_copy_paste ?? false) as boolean,
+    tab_switch_limit: (defaultSettings.tab_switch_limit ?? null) as number | null,
+    is_practice: assessment ? ((assessment as any).is_practice ?? false) : false,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -342,6 +348,9 @@ function AssessmentModal({ moduleId, assessment, onClose, onSuccess }: Assessmen
         results_release_at: formData.results_release_at ? new Date(formData.results_release_at).toISOString() : null,
         results_force_enabled: formData.results_force_enabled,
         deadline: formData.deadline || null,
+        disable_copy_paste: formData.disable_copy_paste,
+        tab_switch_limit: formData.tab_switch_limit === null || formData.tab_switch_limit === undefined || formData.tab_switch_limit === ('' as any) ? null : Number(formData.tab_switch_limit),
+        is_practice: (formData as any).is_practice ?? false,
       };
 
       if (assessment) {
@@ -537,6 +546,39 @@ function AssessmentModal({ moduleId, assessment, onClose, onSuccess }: Assessmen
                 onChange={(e)=> setFormData({ ...formData, end_at: e.target.value } as any)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent" />
             </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div className="flex items-center">
+              <input
+                type="checkbox"
+                id="disable_cp"
+                checked={(formData as any).disable_copy_paste}
+                onChange={(e) => setFormData({ ...formData, disable_copy_paste: e.target.checked } as any)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <label htmlFor="disable_cp" className="ml-2 block text-sm text-gray-700">
+                Disable Copy/Paste during test
+              </label>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Tab Switch Limit (optional)</label>
+              <input
+                type="number"
+                min="0"
+                value={(formData as any).tab_switch_limit ?? ''}
+                onChange={(e)=> setFormData({ ...formData, tab_switch_limit: e.target.value===''? null : (parseInt(e.target.value)||0) } as any)}
+                placeholder="Leave empty for unlimited"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center">
+            <input type="checkbox" checked={(formData as any).is_practice}
+              onChange={(e)=> setFormData({ ...formData, is_practice: e.target.checked } as any)}
+              className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+            <label className="ml-2 block text-sm text-gray-700">Practice (shows under Course &gt; Module, not in Assessments tab)</label>
           </div>
 
           {formData.type === 'mcq' && (

@@ -26,6 +26,13 @@ interface MCQAssessmentBuilderProps {
   onBack: () => void;
 }
 
+import ReactQuill from 'react-quill';
+import 'react-quill/dist/quill.snow.css';
+
+function RichText({ value, onChange }: { value: string; onChange: (v: string)=>void }){
+  return <ReactQuill theme="snow" value={value} onChange={onChange} />;
+}
+
 export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessmentBuilderProps) {
   const [questions, setQuestions] = useState<MCQQuestion[]>([]);
   const [loading, setLoading] = useState(true);
@@ -102,13 +109,14 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
             <option value="">Select Question Bank</option>
             {banks.map(b=> (<option key={b.id} value={b.id}>{b.name}</option>))}
           </select>
+          <button onClick={async ()=>{ const name = prompt('New Bank Name?'); if (!name) return; try { await api.post('/mcq-banks', { name }); await fetchBanks(); } catch(e:any){ alert(e?.message||'Failed to create bank'); } }} className="px-2 py-1 border rounded hover:bg-gray-50">New Bank</button>
           <select value={importMode} onChange={(e)=>setImportMode(e.target.value as any)} className="px-2 py-1 border rounded">
             <option value="random">Random</option>
             <option value="manual" disabled>Manual (soon)</option>
           </select>
           <input type="number" min={1} value={importCount} onChange={(e)=>setImportCount(parseInt(e.target.value)||1)} className="w-20 px-2 py-1 border rounded" />
           <button disabled={!selectedBank}
-            onClick={async ()=>{ await api.post(`/assessments/${assessment.id}/from-bank`, { bank_id: selectedBank, mode: importMode, count: importCount }); await fetchQuestions(); }}
+            onClick={async ()=>{ try { await api.post(`/assessments/${assessment.id}/from-bank`, { bank_id: selectedBank, mode: importMode, count: importCount }); await fetchQuestions(); } catch(e:any){ alert(e?.message || 'Import failed'); } }}
             className="px-3 py-1.5 border rounded hover:bg-gray-50 disabled:opacity-50">
             Import
           </button>
@@ -291,13 +299,12 @@ function MCQQuestionModal({ assessmentId, question, onClose, onSuccess }: MCQQue
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Question Text
             </label>
-            <textarea
-              rows={3}
-              required
-              value={formData.question_text}
-              onChange={(e) => setFormData({ ...formData, question_text: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
+            <div className="flex gap-2 mb-1 text-xs">
+              <button type="button" className="px-2 py-1 border rounded" onClick={()=> setFormData({ ...formData, question_text: formData.question_text + ' **bold**' })}>Bold</button>
+              <button type="button" className="px-2 py-1 border rounded" onClick={()=> setFormData({ ...formData, question_text: formData.question_text + ' _italic_' })}>Italic</button>
+              <button type="button" className="px-2 py-1 border rounded" onClick={()=> setFormData({ ...formData, question_text: formData.question_text + ' ![alt](https://...)' })}>Image</button>
+            </div>
+            <RichText value={formData.question_text} onChange={(v)=> setFormData({ ...formData, question_text: v })} />
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -417,13 +424,7 @@ function MCQQuestionModal({ assessmentId, question, onClose, onSuccess }: MCQQue
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Explanation (optional)
             </label>
-            <textarea
-              rows={2}
-              value={formData.explanation}
-              onChange={(e) => setFormData({ ...formData, explanation: e.target.value })}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="Explain why this is the correct answer..."
-            />
+            <RichText value={formData.explanation} onChange={(v)=> setFormData({ ...formData, explanation: v })} />
           </div>
 
           <div className="flex gap-3 pt-4">

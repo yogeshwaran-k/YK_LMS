@@ -37,6 +37,10 @@ export default function ResultsManagement() {
     <div>
       <h1 className="text-2xl font-bold text-gray-900 mb-4">Results</h1>
 
+      <div className="mb-4 bg-white rounded p-3 border">
+        <StudentReportPanel users={users} />
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
         <div className="bg-white rounded p-3 border">
           <div className="font-semibold text-sm mb-2">Course</div>
@@ -102,6 +106,56 @@ export default function ResultsManagement() {
                 {subs.length===0 && (
                   <tr><td colSpan={5} className="text-center text-gray-500 py-6">No submissions</td></tr>
                 )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StudentReportPanel({ users }: { users: Array<{ id: string; full_name: string; email: string }> }) {
+  const [uid, setUid] = useState('');
+  const [report, setReport] = useState<any|null>(null);
+  async function load() {
+    if (!uid) { setReport(null); return; }
+    try { setReport(await api.get<any>(`/reports/student/${uid}`)); } catch { setReport(null); }
+  }
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+      <div>
+        <label className="block text-sm text-gray-700 mb-1">Student</label>
+        <select value={uid} onChange={(e)=> setUid(e.target.value)} className="w-full border rounded px-2 py-1">
+          <option value="">-- Choose --</option>
+          {users.map(u=> (<option key={u.id} value={u.id}>{u.full_name} ({u.email})</option>))}
+        </select>
+      </div>
+      <button onClick={load} className="px-3 py-2 border rounded">Load Report</button>
+      {uid && (
+        <div className="text-right">
+          <a className="px-3 py-2 border rounded inline-block" href={`/reports/student/${uid}/assessments.csv`} target="_blank" rel="noreferrer">Download Assessments CSV</a>
+        </div>
+      )}
+      {report && (
+        <div className="md:col-span-3 mt-3">
+          <div className="font-semibold mb-2">Courses Progress</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {report.courses.map((c:any)=> (
+              <div key={c.id} className="border rounded p-3">
+                <div className="font-medium text-gray-900">{c.title}</div>
+                <div className="text-xs text-gray-600">Total Seconds: {c.total_seconds}</div>
+              </div>
+            ))}
+          </div>
+          <div className="font-semibold mt-4 mb-2">Assessments Summary</div>
+          <div className="overflow-auto">
+            <table className="w-full text-sm">
+              <thead><tr className="text-left text-gray-500"><th className="py-2 pr-3">Title</th><th className="py-2 pr-3">Type</th><th className="py-2 pr-3">Attempts</th><th className="py-2 pr-3">Best</th><th className="py-2 pr-3">Last Attempt</th></tr></thead>
+              <tbody>
+                {report.assessments.map((a:any)=> (
+                  <tr key={a.id} className="border-t"><td className="py-1 pr-3">{a.title}</td><td className="py-1 pr-3">{a.type}</td><td className="py-1 pr-3">{a.attempts}</td><td className="py-1 pr-3">{a.best_score}</td><td className="py-1 pr-3">{a.last_attempt_at? new Date(a.last_attempt_at).toLocaleString(): '-'}</td></tr>
+                ))}
               </tbody>
             </table>
           </div>

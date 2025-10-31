@@ -1,5 +1,8 @@
 -- Minimal tables to support new features (run in Supabase SQL editor)
 
+-- Publish flag on courses
+alter table if exists courses add column if not exists is_published boolean default true;
+
 -- Course assignments
 create table if not exists course_assignments (
   course_id uuid references courses(id) on delete cascade,
@@ -70,6 +73,9 @@ alter table if exists assessments add column if not exists resume_limit integer 
 alter table if exists assessments add column if not exists show_results_immediately boolean default false;
 alter table if exists assessments add column if not exists results_release_at timestamptz;
 alter table if exists assessments add column if not exists results_force_enabled boolean default false;
+-- Proctoring controls
+alter table if exists assessments add column if not exists disable_copy_paste boolean default false;
+alter table if exists assessments add column if not exists tab_switch_limit integer;
 
 -- Safe alters for existing databases
 alter table if exists submissions add column if not exists language text;
@@ -148,3 +154,45 @@ create table if not exists mcq_bank_questions (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_mcq_bank_questions_bank on mcq_bank_questions(bank_id);
+
+-- Proctoring session events (tab switches, etc.)
+create table if not exists assessment_proctor_events (
+  id uuid primary key default gen_random_uuid(),
+  assessment_id uuid not null references assessments(id) on delete cascade,
+  session_id uuid not null references assessment_sessions(id) on delete cascade,
+  user_id uuid not null references users(id) on delete cascade,
+  event_type text not null check (event_type in ('tab_switch','copy','paste','cut','visibility_hidden')),
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_proctor_events_session on assessment_proctor_events(session_id);
+
+-- Live snapshots for monitoring coding tests
+create table if not exists assessment_live_snapshots (
+  session_id uuid primary key references assessment_sessions(id) on delete cascade,
+  assessment_id uuid not null references assessments(id) on delete cascade,
+  user_id uuid not null references users(id) on delete cascade,
+  code text,
+  last_report jsonb,
+  updated_at timestamptz not null default now()
+);
+create index if not exists idx_live_snapshots_assessment on assessment_live_snapshots(assessment_id);
+
+-- Coding Question Banks
+create table if not exists coding_question_banks (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  description text,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists coding_bank_questions (
+  id uuid primary key default gen_random_uuid(),
+  bank_id uuid not null references coding_question_banks(id) on delete cascade,
+  title text not null,
+  description text not null,
+  starter_code text,
+  difficulty text,
+  marks integer default 10,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_coding_bank_questions_bank on coding_bank_questions(bank_id);

@@ -1,32 +1,28 @@
+import { useEffect, useState } from 'react';
+import { api } from '../../lib/api';
 import { BookOpen, Users, FileText, CheckCircle } from 'lucide-react';
 
 export default function AdminDashboard() {
-  const stats = [
-    {
-      name: 'My Courses',
-      value: '0',
-      icon: BookOpen,
-      color: 'bg-blue-500',
-    },
-    {
-      name: 'Active Students',
-      value: '0',
-      icon: Users,
-      color: 'bg-green-500',
-    },
-    {
-      name: 'Pending Submissions',
-      value: '0',
-      icon: FileText,
-      color: 'bg-yellow-500',
-    },
-    {
-      name: 'Graded Today',
-      value: '0',
-      icon: CheckCircle,
-      color: 'bg-indigo-500',
-    },
-  ];
+  const [stats, setStats] = useState([
+    { name: 'Courses', value: '0', icon: BookOpen, color: 'bg-blue-500' },
+    { name: 'Active Students', value: '0', icon: Users, color: 'bg-green-500' },
+    { name: 'Submissions (24h)', value: '0', icon: FileText, color: 'bg-yellow-500' },
+    { name: 'Graded Today', value: '0', icon: CheckCircle, color: 'bg-indigo-500' },
+  ] as Array<{ name: string; value: string; icon: any; color: string }>);
+
+  useEffect(() => { (async () => {
+    try {
+      const [courses, users, submissions] = await Promise.all([
+        api.get<any[]>('/courses'),
+        api.get<any[]>('/users'),
+        api.get<any[]>('/submissions')
+      ]);
+      const activeStudents = users.filter((u:any)=> u.role==='student' && u.is_active!==false).length;
+      const since = Date.now() - 24*3600*1000;
+      const last24 = submissions.filter((s:any)=> new Date(s.created_at).getTime() >= since).length;
+      setStats(s => s.map(item => item.name==='Courses' ? { ...item, value: String(courses.length) } : item.name==='Active Students' ? { ...item, value: String(activeStudents) } : item.name==='Submissions (24h)' ? { ...item, value: String(last24) } : item));
+    } catch {}
+  })(); }, []);
 
   return (
     <div>

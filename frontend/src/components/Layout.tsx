@@ -11,7 +11,8 @@ import {
   FileText,
   Bell,
   Award,
-  CheckCircle
+  CheckCircle,
+  Code
 } from 'lucide-react';
 import { Route } from './Router';
 
@@ -34,8 +35,10 @@ export default function Layout({ children, currentRoute, onNavigate }: LayoutPro
     { name: 'Groups', icon: Users, route: 'groups', roles: ['super_admin', 'admin'] },
     { name: 'Assessments', icon: FileText, route: 'assessments', roles: ['super_admin', 'admin', 'student'] },
     { name: 'Results', icon: CheckCircle, route: 'results', roles: ['super_admin', 'admin'] },
+    { name: 'Live Monitor', icon: Code, route: 'monitor', roles: ['super_admin', 'admin'] },
     { name: 'Certificates', icon: Award, route: 'certificates', roles: ['super_admin', 'admin', 'student'] },
     { name: 'Notifications', icon: Bell, route: 'notifications', roles: ['super_admin', 'admin', 'student'] },
+    { name: 'Question Bank', icon: FileText, route: 'qb', roles: ['super_admin', 'admin'] },
     { name: 'Settings', icon: Settings, route: 'settings', roles: ['super_admin', 'admin'] },
   ];
 

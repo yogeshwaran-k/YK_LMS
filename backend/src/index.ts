@@ -42,6 +42,8 @@ import submissionsRoutes from './routes/submissions.routes';
 app.use('/submissions', submissionsRoutes);
 import mcqBankRoutes from './routes/mcq_bank.routes';
 app.use('/', mcqBankRoutes);
+import codingBankRoutes from './routes/coding_bank.routes';
+app.use('/', codingBankRoutes);
 import groupsRoutes from './routes/groups.routes';
 app.use('/groups', groupsRoutes);
 

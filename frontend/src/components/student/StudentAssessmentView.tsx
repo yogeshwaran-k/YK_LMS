@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { api } from '../../lib/api';
-import CodeMirrorEditor from '../common/CodeMirrorEditor';
+import AceCodeEditor from '../common/AceCodeEditor';
 
 interface Assessment { id: string; title: string; type: 'mcq'|'coding'|'assignment'; description?: string }
 interface MCQ { id: string; question_text: string; option_a: string; option_b: string; option_c: string; option_d: string; correct_option: 'a'|'b'|'c'|'d'; marks: number }
@@ -24,6 +24,9 @@ function MCQRunner({ assessment, onBack, analysis }: { assessment: Assessment & 
   const [timeLeft, setTimeLeft] = useState<number>(0);
   const startedAt = useRef<number | null>(null);
   const [eligibilityMsg, setEligibilityMsg] = useState<string>('');
+  const [disableCP, setDisableCP] = useState(false);
+  const [tabLimit, setTabLimit] = useState<number | null>(null);
+  const [tabUsed, setTabUsed] = useState(0);
 
   // 15s warmup timebar overlay
   const [warmup, setWarmup] = useState<{ active: boolean; progress: number }>({ active: !analysis, progress: 0 });
@@ -44,12 +47,12 @@ function MCQRunner({ assessment, onBack, analysis }: { assessment: Assessment & 
     }
 
     const warmupMs = 15000; const start = Date.now();
-    let dataReady = false; let timer: any;
+    let dataReady = false;
     // progress loop
-    timer = setInterval(() => {
+    const timer = setInterval(() => {
       const elapsed = Date.now() - start;
       const pct = Math.min(100, Math.floor((elapsed / warmupMs) * 100));
-      setWarmup(w => ({ active: true, progress: pct }));
+      setWarmup({ active: true, progress: pct });
       if (elapsed >= warmupMs && dataReady) { clearInterval(timer); setWarmup({ active: false, progress: 100 }); }
     }, 100);
 
@@ -57,6 +60,11 @@ function MCQRunner({ assessment, onBack, analysis }: { assessment: Assessment & 
     try {
       const e = await api.get<any>(`/assessments/${assessment.id}/eligibility`);
       const reasons: string[] = Array.isArray(e?.reasons) ? e.reasons : [];
+      if (e?.proctor) {
+        setDisableCP(!!e.proctor.disable_copy_paste);
+        setTabLimit(e.proctor.tab_switch_limit ?? null);
+        setTabUsed(e.proctor.tab_switch_used || 0);
+      }
       if (!e.eligible) {
         // If resume exceeded but attempts remain, start a new attempt automatically
         if (reasons.includes('resume_count_exceeded') && e.attempts && e.attempts.used < e.attempts.allowed) {
@@ -131,13 +139,73 @@ function MCQRunner({ assessment, onBack, analysis }: { assessment: Assessment & 
 
   useEffect(() => { if (sessionId && timeLeft === 0 && view==='test') void autoSubmit(); }, [timeLeft, sessionId, view]);
 
+  // Poll forced end
+  useEffect(() => {
+    if (!sessionId || view!=='test') return;
+    const t = setInterval(async ()=>{
+      try {
+        const s = await api.get<any>(`/assessments/${assessment.id}/sessions/${sessionId}`);
+        if (s.status !== 'active') {
+          setModal({ open: true, title: 'Session ended', body: 'Your session has been ended by admin.', onClose: ()=> { setModal({ open:false, title:'', body:'' }); onBack(); } });
+          clearInterval(t);
+        }
+      } catch {}
+    }, 5000);
+    return ()=> clearInterval(t);
+  }, [sessionId, view]);
+
+  // Proctoring: copy/paste disable and tab switch counting
+  useEffect(() => {
+    if (!sessionId || view !== 'test') return;
+    const onVis = async () => {
+      if (document.hidden) await recordTabSwitch();
+    };
+    const onBlur = async () => { await recordTabSwitch(); };
+    const prevent = (e: Event) => { if (disableCP) { e.preventDefault(); return false as any; } };
+    const preventKey = (e: KeyboardEvent) => {
+      if (!disableCP) return;
+      if ((e.ctrlKey || (e as any).metaKey) && ['c','v','x','a'].includes(e.key.toLowerCase())) { e.preventDefault(); }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('copy', prevent);
+    document.addEventListener('cut', prevent);
+    document.addEventListener('paste', prevent);
+    document.addEventListener('contextmenu', prevent);
+    document.addEventListener('keydown', preventKey as any);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('copy', prevent);
+      document.removeEventListener('cut', prevent);
+      document.removeEventListener('paste', prevent);
+      document.removeEventListener('contextmenu', prevent);
+      document.removeEventListener('keydown', preventKey as any);
+    };
+  }, [sessionId, view, disableCP]);
+
+  async function recordTabSwitch() {
+    try {
+      if (!sessionId) return;
+      const r = await api.post<{ used:number; limit:number|null; exceeded:boolean }>(`/assessments/${assessment.id}/sessions/${sessionId}/proctor/tab-switch`);
+      setTabUsed(r.used || (tabUsed+1));
+      const lim = r.limit ?? tabLimit;
+      const remaining = lim === null ? null : Math.max(0, (lim as number) - (r.used||0));
+      setModal({ open: true, title: 'Tab switch detected', body: lim===null ? 'Tab switches are being monitored.' : `Remaining switches: ${remaining}`, onClose: ()=> setModal(m=>({ ...m, open: false })) });
+      if (r.exceeded) {
+        // Session moved to paused/cancelled by backend; navigate out without submitting
+        setModal({ open: true, title: 'Session paused', body: 'Tab switch limit exceeded. Your attempt is paused. You can start a new attempt if allowed.', onClose: ()=> { setModal({ open:false, title:'', body:'' }); onBack(); } });
+      }
+    } catch {}
+  }
+
   async function autoSubmit(){
     try {
       const payload = { answers, autoTimeout: true };
       const s = score();
       await api.post('/submissions', { assessment_id: assessment.id, type: 'mcq', score: s, payload, started_at: startedAt.current ? new Date(startedAt.current).toISOString(): undefined, elapsed_seconds: startedAt.current ? Math.round((Date.now()-startedAt.current)/1000) : undefined });
       if (sessionId) await api.post(`/assessments/${assessment.id}/sessions/${sessionId}/finish`);
-    } catch (e:any) {
+    } catch {
       // Graceful fallback if assessment missing
     } finally {
       setView('result');
@@ -222,8 +290,22 @@ function MCQRunner({ assessment, onBack, analysis }: { assessment: Assessment & 
   }
 
   const q = questions[idx];
+  // Simple modal component
+  const [modal, setModal] = useState<{ open: boolean; title: string; body: string; onClose?: ()=>void }>({ open: false, title: '', body: '' });
+
   return (
     <div>
+      {modal.open && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow max-w-md w-full">
+            <div className="px-4 py-3 border-b font-semibold">{modal.title}</div>
+            <div className="p-4 text-sm text-gray-800 whitespace-pre-wrap">{modal.body}</div>
+            <div className="px-4 py-3 border-t text-right">
+              <button onClick={()=>{ modal.onClose?.(); setModal({ open:false, title:'', body:'' }); }} className="px-3 py-1.5 border rounded">OK</button>
+            </div>
+          </div>
+        </div>
+      )}
       {warmup.active && !analysis && (
         <div className="fixed inset-0 bg-white/95 z-50 flex items-center justify-center">
           <div className="w-full max-w-md px-6">
@@ -245,6 +327,9 @@ function MCQRunner({ assessment, onBack, analysis }: { assessment: Assessment & 
         <div className="text-sm text-gray-600 flex items-center gap-4">
           <span>Attempt {attempts+1} / {assessment.allowed_attempts || 1}</span>
           <span>Time left: <span className={`${timeLeft <= Math.max(1, ((assessment as any).duration_minutes||60)*60)*0.1 ? 'text-red-600 font-semibold' : ''}`}>{formatTime(timeLeft)}</span></span>
+          {tabLimit !== null && (
+            <span>Tab switches: {Math.min(tabUsed, tabLimit+1)} / {tabLimit}</span>
+          )}
         </div>
       </div>
 
@@ -275,6 +360,7 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
   const [selected, setSelected] = useState<CodingQ | null>(null);
   const [tests, setTests] = useState<TestCase[]>([]);
   const [code, setCode] = useState<string>('');
+  const [warmup, setWarmup] = useState<{ active: boolean; progress: number }>({ active: true, progress: 0 });
   const [stdin, setStdin] = useState('');
   const [stdout, setStdout] = useState('');
   const [runSummary, setRunSummary] = useState<{ passed: number; total: number } | null>(null);
@@ -288,11 +374,29 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
   const startedAt = useRef<number | null>(null);
   const sessionIdRef = useRef<string | null>(null);
   const codeKey = `code_${assessment.id}`;
+  const [disableCP, setDisableCP] = useState(false);
+  const [tabLimit, setTabLimit] = useState<number | null>(null);
+  const [tabUsed, setTabUsed] = useState(0);
 
   useEffect(() => { (async () => {
+    // warmup bar
+    const warmupMs = 15000; const start = Date.now(); let dataReady = false;
+    const timer = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const pct = Math.min(100, Math.floor((elapsed / warmupMs) * 100));
+      setWarmup({ active: true, progress: pct });
+      if (elapsed >= warmupMs && dataReady) { clearInterval(timer); setWarmup({ active: false, progress: 100 }); }
+    }, 100);
     // Eligibility and start/resume
+    let elig: any = null;
     try {
       const e = await api.get<any>(`/assessments/${assessment.id}/eligibility`);
+      elig = e;
+      if (e?.proctor) {
+        setDisableCP(!!e.proctor.disable_copy_paste);
+        setTabLimit(e.proctor.tab_switch_limit ?? null);
+        setTabUsed(e.proctor.tab_switch_used || 0);
+      }
       if (!e.eligible) throw new Error(e.reasons?.join(', ') || 'Not eligible');
       if (e.can_resume && e.session_id) {
         await api.post(`/assessments/${assessment.id}/sessions/${e.session_id}/resume`);
@@ -306,15 +410,19 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
         startedAt.current = Date.now();
       }
     } catch (err:any) {
-      alert(`Not eligible: ${err?.message || 'Unknown'}`);
-      onBack();
+      setCModal({ open: true, title: 'Not eligible', body: String(err?.message || 'Unknown'), onClose: ()=> { setCModal({ open:false, title:'', body:'' }); onBack(); } });
       return;
     }
 
     const qs = await api.get<CodingQ[]>(`/assessments/${assessment.id}/coding-questions`);
     setQuestions(qs);
     if (qs[0]) setSelected(qs[0]);
-    const saved = localStorage.getItem(codeKey); if (saved) setCode(saved);
+    // only restore saved code when resuming the same attempt
+    const saved = localStorage.getItem(codeKey);
+    const canResumeLocal = !!(elig?.can_resume && elig?.session_id);
+    if (saved && canResumeLocal) setCode(saved);
+    else localStorage.removeItem(codeKey);
+    dataReady = true; setTimeout(()=>{ setWarmup({ active: false, progress: 100 }); }, 200);
   })(); }, [assessment.id]);
   useEffect(() => {
     if (timeLeft <= 0) return;
@@ -323,6 +431,63 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
   }, [timeLeft]);
   useEffect(() => { (async () => { if (selected) { const t = await api.get<TestCase[]>(`/assessments/coding-questions/${selected.id}/test-cases`); setTests(t); } })(); }, [selected?.id]);
   useEffect(() => { if (sessionIdRef.current && startedAt.current && timeLeft===0) void autoSubmitCoding(); }, [timeLeft]);
+
+  // Poll forced end (coding)
+  useEffect(() => {
+    if (!sessionIdRef.current) return;
+    const t = setInterval(async ()=>{
+      try {
+        const s = await api.get<any>(`/assessments/${assessment.id}/sessions/${sessionIdRef.current}`);
+        if (s.status !== 'active') {
+          setCModal({ open: true, title: 'Session ended', body: 'Your session has been ended by admin.', onClose: ()=> { setCModal({ open:false, title:'', body:'' }); onBack(); } });
+          clearInterval(t);
+        }
+      } catch {}
+    }, 5000);
+    return ()=> clearInterval(t);
+  }, [sessionIdRef.current]);
+
+  // Proctoring: copy/paste disable and tab switch counting for coding as well
+  useEffect(() => {
+    if (!sessionIdRef.current) return;
+    const onVis = async () => { if (document.hidden) await recordTabSwitch(); };
+    const onBlur = async () => { await recordTabSwitch(); };
+    const prevent = (e: Event) => { if (disableCP) { e.preventDefault(); return false as any; } };
+    const preventKey = (e: KeyboardEvent) => {
+      if (!disableCP) return;
+      if ((e.ctrlKey || (e as any).metaKey) && ['c','v','x','a'].includes(e.key.toLowerCase())) { e.preventDefault(); }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('blur', onBlur);
+    document.addEventListener('copy', prevent);
+    document.addEventListener('cut', prevent);
+    document.addEventListener('paste', prevent);
+    document.addEventListener('contextmenu', prevent);
+    document.addEventListener('keydown', preventKey as any);
+    return () => {
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('blur', onBlur);
+      document.removeEventListener('copy', prevent);
+      document.removeEventListener('cut', prevent);
+      document.removeEventListener('paste', prevent);
+      document.removeEventListener('contextmenu', prevent);
+      document.removeEventListener('keydown', preventKey as any);
+    };
+  }, [sessionIdRef.current, disableCP]);
+
+  async function recordTabSwitch() {
+    try {
+      if (!sessionIdRef.current) return;
+      const r = await api.post<{ used:number; limit:number|null; exceeded:boolean }>(`/assessments/${assessment.id}/sessions/${sessionIdRef.current}/proctor/tab-switch`);
+      setTabUsed(r.used || (tabUsed+1));
+      const lim = r.limit ?? tabLimit;
+      const remaining = lim === null ? null : Math.max(0, (lim as number) - (r.used||0));
+      setCModal({ open: true, title: 'Tab switch detected', body: lim===null ? 'Tab switches are being monitored.' : `Remaining switches: ${remaining}`, onClose: ()=> setCModal(m=>({ ...m, open: false })) });
+      if (r.exceeded) {
+        setCModal({ open: true, title: 'Session paused', body: 'Tab switch limit exceeded. Your attempt is paused. You can start a new attempt if allowed.', onClose: ()=> { setCModal({ open:false, title:'', body:'' }); onBack(); } });
+      }
+    } catch {}
+  }
 
   async function autoSubmitCoding() {
     // Auto-submit on timeout using last known results if any
@@ -339,19 +504,46 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
         question_ids: questions.map(q=>q.id)
       });
       if (sessionIdRef.current) await api.post(`/assessments/${assessment.id}/sessions/${sessionIdRef.current}/finish`);
-    } catch (e:any) {
+    } catch {
       // ignore submit error
     } finally {
-      alert('Time expired! Auto-submitted.');
-      onBack();
+      setCModal({ open: true, title: 'Time expired', body: 'Your code has been submitted automatically.', onClose: ()=> { setCModal({ open:false, title:'', body:'' }); onBack(); } });
     }
   }
 
+  const [cModal, setCModal] = useState<{ open: boolean; title: string; body: string; onClose?: ()=>void }>({ open: false, title: '', body: '' });
   return (
     <div>
-      <div className="mb-4">
-        <button onClick={onBack} className="text-blue-600 hover:text-blue-700">← Back</button>
-        <h2 className="text-2xl font-bold text-gray-900">{assessment.title}</h2>
+      {cModal.open && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-lg shadow max-w-md w-full">
+            <div className="px-4 py-3 border-b font-semibold">{cModal.title}</div>
+            <div className="p-4 text-sm text-gray-800 whitespace-pre-wrap">{cModal.body}</div>
+            <div className="px-4 py-3 border-t text-right">
+              <button onClick={()=>{ cModal.onClose?.(); setCModal({ open:false, title:'', body:'' }); }} className="px-3 py-1.5 border rounded">OK</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {warmup.active && (
+        <div className="fixed inset-0 bg-white/95 z-50 flex items-center justify-center">
+          <div className="w-full max-w-md px-6">
+            <div className="text-center mb-4">
+              <div className="text-lg font-semibold text-gray-900">Preparing your test…</div>
+              <div className="text-sm text-gray-500">Please wait while we set things up</div>
+            </div>
+            <div className="w-full bg-gray-200 rounded h-2 overflow-hidden">
+              <div className="bg-indigo-600 h-2 transition-all" style={{ width: `${warmup.progress}%` }} />
+            </div>
+          </div>
+        </div>
+      )}
+      <div className="mb-4 flex items-center justify-between">
+        <div>
+          <button onClick={onBack} className="text-blue-600 hover:text-blue-700">← Back</button>
+          <h2 className="text-2xl font-bold text-gray-900">{assessment.title}</h2>
+        </div>
+        <div className="text-sm text-gray-600">{tabLimit !== null && (<span>Tab switches: {Math.min(tabUsed, tabLimit+1)} / {tabLimit}</span>)}</div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -404,7 +596,7 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
                     </select>
                     <button onClick={()=>{ localStorage.setItem(codeKey, code); }} className="px-3 py-1.5 border rounded hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600">Save Code</button>
                     <button onClick={async ()=>{
-                      const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin });
+                      const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin, assessment_id: assessment.id });
                       setStdout(res.stdout || '');
                     }} className="px-3 py-1.5 border rounded hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600">Run</button>
 <button disabled={isRunning || timeLeft===0} onClick={async ()=>{
@@ -415,7 +607,7 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
                       let passed = 0;
                       for (let i=0;i<all.length;i++) {
                         const t = all[i];
-                        const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin: t.input });
+                        const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin: t.input, assessment_id: assessment.id });
                         const out = (res.stdout || '').trim();
                         const exp = (t.expected_output || '').trim();
                         const ok = out === exp; if (ok) passed++;
@@ -435,7 +627,7 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
                       let passed = 0;
                       for (let i=0;i<samples.length;i++) {
                         const t = samples[i];
-                        const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin: t.input });
+                        const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin: t.input, assessment_id: assessment.id });
                         const out = (res.stdout || '').trim();
                         const exp = (t.expected_output || '').trim();
                         const ok = out === exp; if (ok) passed++;
@@ -443,7 +635,7 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
                       }
                       for (let i=0;i<hidden.length;i++) {
                         const t = hidden[i];
-                        const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin: t.input });
+                        const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin: t.input, assessment_id: assessment.id });
                         const out = (res.stdout || '').trim();
                         const exp = (t.expected_output || '').trim();
                         const ok = out === exp; if (ok) passed++;
@@ -456,16 +648,34 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
                       setIsRunning(false);
                     }} className="px-3 py-1.5 border rounded hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600 disabled:opacity-50">Submit Project</button>
                     <button onClick={async ()=>{
-                      if (!lastSubmitRows) return;
-                      const score = lastSubmitRows.filter(r=>r.status==='Pass').length;
-                      await api.post('/submissions', { assessment_id: assessment.id, type: 'coding', payload: { code, language, report: lastSubmitRows }, score, started_at: startedAt.current ? new Date(startedAt.current).toISOString(): undefined, elapsed_seconds: startedAt.current ? Math.round((Date.now()-(startedAt.current))/1000) : undefined, question_ids: questions.map(q=>q.id) });
+                      // If no full run yet, run all (samples + hidden) before submit
+                      let rows = lastSubmitRows;
+                      if (!rows) {
+                        const samples = tests.filter(t=>!t.is_hidden);
+                        const hidden = tests.filter(t=>t.is_hidden);
+                        const all: typeof tests = [...samples, ...hidden];
+                        const tmp: any[] = [];
+                        for (let i=0;i<all.length;i++) {
+                          const t = all[i];
+                          const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin: t.input, assessment_id: assessment.id });
+                          const out = (res.stdout || '').trim();
+                          const exp = (t.expected_output || '').trim();
+                          const ok = out === exp;
+                          tmp.push({ idx: i+1, status: ok ? 'Pass' : 'Fail', expected: exp, actual: out, kind: t.is_hidden?'hidden':'sample', test_case_id: t.id, weightage: t.weightage });
+                        }
+                        rows = tmp as any;
+                        setLastSubmitRows(rows);
+                      }
+                      const score = (rows||[]).filter(r=>r.status==='Pass').length;
+                      await api.post(`/assessments/${assessment.id}/sessions/${sessionIdRef.current}/live`, { code, last_report: rows });
+                      await api.post('/submissions', { assessment_id: assessment.id, type: 'coding', payload: { code, language, report: rows }, score, started_at: startedAt.current ? new Date(startedAt.current).toISOString(): undefined, elapsed_seconds: startedAt.current ? Math.round((Date.now()-(startedAt.current))/1000) : undefined, question_ids: questions.map(q=>q.id) });
                       if (sessionIdRef.current) await api.post(`/assessments/${assessment.id}/sessions/${sessionIdRef.current}/finish`);
                       onBack();
-                    }} disabled={!lastSubmitRows || timeLeft===0} className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Submit Test</button>
+                    }} disabled={timeLeft===0} className="px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50">Submit Test</button>
                   </div>
                 </div>
                 <div className="p-3 bg-gray-50 dark:bg-[#0f172a]">
-                  <CodeMirrorEditor value={code} onChange={setCode} onSave={()=>localStorage.setItem(codeKey, code)} language={language} />
+                  <AceCodeEditor value={code} onChange={setCode} onSave={()=>localStorage.setItem(codeKey, code)} language={language} />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3 px-4 pb-3">
                   <div>

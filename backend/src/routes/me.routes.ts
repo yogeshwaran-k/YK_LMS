@@ -15,7 +15,8 @@ router.get('/courses', async (req, res) => {
   const { data, error } = await supabaseAdmin
     .from('courses')
     .select('*')
-    .in('id', ids)
+.in('id', ids)
+    .eq('is_published', true)
     .order('created_at', { ascending: false });
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);

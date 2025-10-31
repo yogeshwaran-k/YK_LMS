@@ -84,7 +84,20 @@ export default function StudentCourseView({ course, onBack }: { course: Course; 
                     </div>
                   </div>
 
-                  {/* Assessments moved to Assessments tab; hidden in course view */}
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900 mb-2">Practice Assessments</h3>
+                    <div className="space-y-2">
+                      {(assessments[m.id]||[]).filter((a:any)=> a.is_practice).map((a:any)=> (
+                        <div key={a.id} className="flex items-center justify-between p-2 border rounded">
+                          <div className="text-sm text-gray-900">{a.title} ({a.type})</div>
+                          <button onClick={()=> setActiveAssessment(a)} className="text-blue-600 hover:text-blue-800 text-sm">Start</button>
+                        </div>
+                      ))}
+                      {(assessments[m.id]||[]).filter((a:any)=> a.is_practice).length===0 && (
+                        <div className="text-sm text-gray-500">No practice items</div>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
             </div>

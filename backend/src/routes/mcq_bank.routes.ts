@@ -64,7 +64,40 @@ router.post('/mcq-banks/:bankId/questions', requireRole('admin', 'super_admin'),
     .select()
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
-  res.status(201).json(data);
+res.status(201).json(data);
+});
+
+// Bulk CSV into MCQ bank
+router.post('/mcq-banks/:bankId/questions/bulk', requireRole('admin','super_admin'), async (req, res) => {
+  const { bankId } = req.params as any;
+  const csv: string = (req.body?.csv as string) || '';
+  if (!csv.trim()) return res.status(400).json({ error: 'Missing csv' });
+  const lines = csv.split(/\r?\n/).filter(Boolean);
+  const header = lines.shift();
+  if (!header) return res.status(400).json({ error: 'Empty csv' });
+  const headers = header.split(',').map(h=>h.trim().toLowerCase());
+  const required = ['question_text','option_a','option_b','option_c','option_d','correct_option','marks'];
+  for (const r of required) if (!headers.includes(r)) return res.status(400).json({ error: `Missing column ${r}` });
+  const rows = lines.map(line => {
+    const cols = line.split(',');
+    const get = (name: string) => cols[headers.indexOf(name)]?.trim();
+    return {
+      bank_id: bankId,
+      question_text: get('question_text'),
+      option_a: get('option_a'),
+      option_b: get('option_b'),
+      option_c: get('option_c'),
+      option_d: get('option_d'),
+      correct_option: (get('correct_option')||'a') as 'a'|'b'|'c'|'d',
+      marks: Number(get('marks')||1) || 1,
+      difficulty: (get('difficulty')||null),
+      topic: (get('topic')||null),
+      explanation: get('explanation')||'',
+    } as any;
+  });
+  const { error } = await supabaseAdmin.from('mcq_bank_questions').insert(rows);
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ inserted: rows.length });
 });
 
 // Build an assessment's MCQs from a bank

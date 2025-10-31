@@ -6,6 +6,23 @@ interface Course { id: string; title: string; description: string; category: str
 
 import StudentCourseView from '../student/StudentCourseView';
 
+function StudentNotifications() {
+  const [items, setItems] = useState<Array<{ id: string; title: string; body: string; created_at: string }>>([]);
+  useEffect(()=>{ (async()=>{ try { setItems(await api.get<any[]>('/notifications')); } catch {} })(); }, []);
+  if (items.length===0) return <div className="text-gray-500">No notifications</div>;
+  return (
+    <div className="space-y-3">
+      {items.map(n => (
+        <div key={n.id} className="border rounded p-3">
+          <div className="font-medium text-gray-900">{n.title}</div>
+          <div className="text-sm text-gray-700">{n.body}</div>
+          <div className="text-xs text-gray-500 mt-1">{new Date(n.created_at).toLocaleString()}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function StudentDashboard() {
   const [courses, setCourses] = useState<Course[]>([]);
   const [selected, setSelected] = useState<Course | null>(null);
@@ -113,8 +130,8 @@ export default function StudentDashboard() {
         </div>
 
         <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Recent Activity</h2>
-          <p className="text-gray-500">No recent activity</p>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Notifications</h2>
+          <StudentNotifications />
         </div>
       </div>
     </div>

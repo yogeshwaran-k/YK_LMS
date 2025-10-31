@@ -109,8 +109,8 @@ export default function StudentAssessments() {
               <div className="px-4 py-2 font-semibold">{c.title}</div>
               <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
                 {(modulesByCourse[c.id]||[]).flatMap(m => (assessmentsByModule[m.id]||[]).map(a => ({ a, m }))).map(({a,m}) => {
+                  if ((a as any).is_practice) return null;
                   const st = statusFor(a);
-                  const canTake = !st.disabled;
                   const e = eligibility[a.id];
                   return (
                     <div key={a.id} className="border rounded-lg p-4 md:p-5 min-h-[120px]">
@@ -155,6 +155,7 @@ export default function StudentAssessments() {
                               const attempts = mine?.count || 0;
                               const now = new Date();
                               const enabledByAdmin = (a.show_results_immediately === true) || (a.results_force_enabled === true) || (!!a.results_release_at && now >= new Date(a.results_release_at));
+                              if (a.type === 'coding') return null;
                               return (attempts > 0 && enabledByAdmin) ? (
                                 <button onClick={()=> setActive({ assessment: a, analysis: true })} className="px-3 py-1.5 text-sm rounded border">View Score & Analysis</button>
                               ) : null;

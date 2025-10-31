@@ -10,6 +10,7 @@ const bodySchema = z.object({
   language: z.string().min(1),
   code: z.string().min(1),
   stdin: z.string().optional().default(''),
+  assessment_id: z.string().uuid().optional(),
 });
 
 // Map common language aliases to Piston names
@@ -29,7 +30,20 @@ const normalizeLanguage = (lang: string) => {
 router.post('/execute', async (req, res) => {
   const parsed = bodySchema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid request' });
-  const { language, code, stdin } = parsed.data;
+  const { language, code, stdin, assessment_id } = parsed.data;
+
+  // Optional language restriction per assessment
+  if (assessment_id) {
+    const { getEffectiveAssessmentSettings } = await import('../utils/assessments');
+    const settings = await getEffectiveAssessmentSettings(assessment_id, req.user!.sub);
+    const allowed = (settings?.allowed_languages as any) as string[] | null | undefined;
+    if (allowed && allowed.length) {
+      const norm = normalizeLanguage(language);
+      if (!allowed.includes(norm)) {
+        return res.status(403).json({ error: `Language not allowed for this assessment` });
+      }
+    }
+  }
 
   try {
     if (env.runnerProvider === 'piston') {

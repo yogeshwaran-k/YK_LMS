@@ -46,6 +46,8 @@ router.post('/modules/:moduleId', requireRole('admin', 'super_admin'), async (re
     resume_limit: z.number().int().nonnegative().optional().default(0),
     results_release_at: z.string().datetime().optional().nullable(),
     results_force_enabled: z.boolean().optional().default(false),
+    disable_copy_paste: z.boolean().optional().default(false),
+    tab_switch_limit: z.number().int().nonnegative().optional().nullable(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
@@ -162,6 +164,21 @@ router.get('/:assessmentId/eligibility', async (req, res) => {
 
   const eligible = can_start || can_resume;
 
+  // Proctoring: compute tab switch usage if active session exists
+  let tab_switch_used = 0;
+  if (active && session_id) {
+    const { count } = await (supabaseAdmin
+      .from('assessment_proctor_events')
+      .select('id', { count: 'exact', head: true }) as any)
+      .eq('session_id', session_id)
+      .eq('event_type', 'tab_switch');
+    tab_switch_used = (count as number) || 0;
+    if ((settings.tab_switch_limit ?? null) !== null && tab_switch_used >= (settings.tab_switch_limit as number)) {
+      can_resume = false;
+      if (!reasons.includes('tab_switch_limit_exceeded')) reasons.push('tab_switch_limit_exceeded');
+    }
+  }
+
   res.json({
     eligible,
     reasons: eligible ? [] : reasons,
@@ -173,6 +190,7 @@ router.get('/:assessmentId/eligibility', async (req, res) => {
     can_resume,
     session_id,
     remaining_seconds,
+    proctor: { disable_copy_paste: settings.disable_copy_paste ?? false, tab_switch_limit: settings.tab_switch_limit ?? null, tab_switch_used },
   });
 });
 
@@ -263,6 +281,21 @@ router.post('/:assessmentId/sessions/:sessionId/resume', async (req, res) => {
       .eq('id', sessionId);
     return res.status(403).json({ error: 'Resume Count Exceeded' });
   }
+  // Proctoring: block resume if tab switch limit reached/exceeded
+  const { count: tabCount } = await (supabaseAdmin
+    .from('assessment_proctor_events')
+    .select('id', { count: 'exact', head: true }) as any)
+    .eq('session_id', sessionId)
+    .eq('event_type', 'tab_switch');
+  const usedTab = (tabCount as number) || 0;
+  const tabLimit = settings.tab_switch_limit ?? null;
+  if (tabLimit !== null && usedTab >= (tabLimit as number)) {
+    await supabaseAdmin
+      .from('assessment_sessions')
+      .update({ status: 'cancelled', ended_at: new Date().toISOString() })
+      .eq('id', sessionId);
+    return res.status(403).json({ error: 'Tab Switch Limit Exceeded' });
+  }
 
   const { data, error } = await supabaseAdmin
     .from('assessment_sessions')
@@ -301,6 +334,159 @@ router.post('/:assessmentId/sessions/:sessionId/finish', async (req, res) => {
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
+});
+
+// Proctoring endpoints
+router.post('/:assessmentId/sessions/:sessionId/proctor/tab-switch', async (req, res) => {
+  const { assessmentId, sessionId } = req.params as any;
+  const userId = req.user!.sub;
+  // Enforce access
+  const courseId = await resolveCourseIdForAssessment(assessmentId);
+  if (!courseId) return res.status(404).json({ error: 'Assessment not found' });
+  const ok = await ensureCourseAccessOr403(req, res, courseId);
+  if (!ok) return;
+  // Validate session ownership and status
+  const { data: s } = await supabaseAdmin
+    .from('assessment_sessions')
+    .select('*')
+    .eq('id', sessionId)
+    .eq('assessment_id', assessmentId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (!s) return res.status(404).json({ error: 'Session not found' });
+  // Record event
+  await supabaseAdmin
+    .from('assessment_proctor_events')
+    .insert([{ assessment_id: assessmentId, session_id: sessionId, user_id: userId, event_type: 'tab_switch' }]);
+  // Fetch settings and counts
+  const { getEffectiveAssessmentSettings } = await import('../utils/assessments');
+  const settings = await getEffectiveAssessmentSettings(assessmentId, userId);
+  const { count } = await (supabaseAdmin
+    .from('assessment_proctor_events')
+    .select('id', { count: 'exact', head: true }) as any)
+    .eq('session_id', sessionId)
+    .eq('event_type', 'tab_switch');
+  const used = (count as number) || 0;
+  const limit = settings?.tab_switch_limit ?? null;
+  const exceeded = limit !== null && used > (limit as number);
+  // Optionally lock session if exceeded to prevent further resume
+  if (exceeded) {
+    await supabaseAdmin
+      .from('assessment_sessions')
+      .update({ status: 'cancelled', ended_at: new Date().toISOString() })
+      .eq('id', sessionId);
+  }
+  res.json({ used, limit, exceeded });
+});
+
+// Live monitoring endpoints
+router.post('/:assessmentId/sessions/:sessionId/live', async (req, res) => {
+  const { assessmentId, sessionId } = req.params as any;
+  const userId = req.user!.sub;
+  const { code, last_report } = req.body || {};
+  // Ensure session belongs to this user
+  const { data: s } = await supabaseAdmin.from('assessment_sessions').select('id,user_id,assessment_id,status').eq('id', sessionId).maybeSingle();
+  if (!s || (s as any).user_id !== userId || (s as any).assessment_id !== assessmentId) return res.status(404).json({ error: 'Session not found' });
+  if ((s as any).status !== 'active') return res.status(409).json({ error: 'Session not active' });
+  const up = { session_id: sessionId, assessment_id: assessmentId, user_id: userId, code: code ?? null, last_report: last_report ?? null, updated_at: new Date().toISOString() } as any;
+  await supabaseAdmin.from('assessment_live_snapshots').upsert(up);
+  res.json({ ok: true });
+});
+
+router.get('/:assessmentId/live', requireRole('admin','super_admin'), async (req, res) => {
+  const { assessmentId } = req.params as any;
+  const { data: sessions } = await supabaseAdmin
+    .from('assessment_sessions').select('id,user_id,started_at,resume_count,status').eq('assessment_id', assessmentId).eq('status', 'active');
+  const userIds = Array.from(new Set((sessions||[]).map((s:any)=>s.user_id)));
+  const { data: users } = await supabaseAdmin.from('users').select('id,full_name,email').in('id', userIds);
+  const { data: snaps } = await supabaseAdmin.from('assessment_live_snapshots').select('*').eq('assessment_id', assessmentId);
+  res.json({ sessions: sessions||[], users: users||[], snapshots: snaps||[] });
+});
+
+// Force submit (admin)
+router.post('/:assessmentId/sessions/:sessionId/force-submit', requireRole('admin','super_admin'), async (req, res) => {
+  const { assessmentId, sessionId } = req.params as any;
+  // fetch live snapshot
+  const { data: snap } = await supabaseAdmin
+    .from('assessment_live_snapshots')
+    .select('*')
+    .eq('session_id', sessionId)
+    .maybeSingle();
+  // finish the session
+  await supabaseAdmin.from('assessment_sessions').update({ status: 'completed', ended_at: new Date().toISOString() }).eq('id', sessionId);
+  // if coding and snapshot exists, persist as a submission
+  if (snap && (snap as any).last_report) {
+    const report = (snap as any).last_report as any[];
+    const score = Array.isArray(report) ? report.filter(r=>r.status==='Pass').length : null;
+    await supabaseAdmin.from('submissions').insert([{ assessment_id: assessmentId, user_id: (snap as any).user_id, type: 'coding', payload: { code: (snap as any).code, report }, score }]);
+  }
+  res.json({ ok: true });
+});
+
+// Start-or-resume: clears stale active and starts new
+router.post('/:assessmentId/start-or-resume', async (req, res) => {
+  const { assessmentId } = req.params as any;
+  const courseId = await resolveCourseIdForAssessment(assessmentId);
+  if (!courseId) return res.status(404).json({ error: 'Assessment not found' });
+  const ok = await ensureCourseAccessOr403(req, res, courseId);
+  if (!ok) return;
+
+  const userId = req.user!.sub;
+  const { getEffectiveAssessmentSettings, getActiveSession, withinWindow, remainingSeconds } = await import('../utils/assessments');
+  const settings = await getEffectiveAssessmentSettings(assessmentId, userId);
+  if (!settings) return res.status(404).json({ error: 'Assessment not found' });
+  const now = new Date();
+  if (!withinWindow(now, settings.start_at, settings.end_at)) return res.status(403).json({ error: 'Window closed' });
+
+  let active = await getActiveSession(assessmentId, userId);
+  if (active) {
+    const rem = remainingSeconds(now, (active as any).started_at, settings.duration_minutes, settings.end_at);
+    const limit = settings.resume_limit ?? 0;
+    const nextResumeCount = ((active as any).resume_count ?? 0) + 1;
+    const resumeExceeded = nextResumeCount > limit;
+    if (rem > 0 && !resumeExceeded) {
+      return res.json({ resumed: true, session_id: (active as any).id });
+    }
+    await supabaseAdmin.from('assessment_sessions').update({ status: rem <= 0 ? 'completed' : 'cancelled', ended_at: now.toISOString() }).eq('id', (active as any).id);
+    active = null;
+  }
+  const { data, error } = await supabaseAdmin.from('assessment_sessions').insert([{ assessment_id: assessmentId, user_id: userId, status: 'active' }]).select().maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  res.status(201).json({ resumed: false, session_id: (data as any).id });
+});
+
+// Get session status
+router.get('/:assessmentId/sessions/:sessionId', async (req, res) => {
+  const { assessmentId, sessionId } = req.params as any;
+  const courseId = await resolveCourseIdForAssessment(assessmentId);
+  if (!courseId) return res.status(404).json({ error: 'Assessment not found' });
+  const ok = await ensureCourseAccessOr403(req, res, courseId);
+  if (!ok) return;
+  const { data, error } = await supabaseAdmin
+    .from('assessment_sessions')
+    .select('id,status,started_at,ended_at,resume_count,last_resume_at')
+    .eq('id', sessionId)
+    .eq('assessment_id', assessmentId)
+    .eq('user_id', req.user!.sub)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'Session not found' });
+  res.json(data);
+});
+
+// Proctoring summary for a session
+router.get('/:assessmentId/sessions/:sessionId/proctor', async (req, res) => {
+  const { assessmentId, sessionId } = req.params as any;
+  const courseId = await resolveCourseIdForAssessment(assessmentId);
+  if (!courseId) return res.status(404).json({ error: 'Assessment not found' });
+  const ok = await ensureCourseAccessOr403(req, res, courseId);
+  if (!ok) return;
+  const { count: tabCount } = await (supabaseAdmin
+    .from('assessment_proctor_events')
+    .select('id', { count: 'exact', head: true }) as any)
+    .eq('session_id', sessionId)
+    .eq('event_type', 'tab_switch');
+  res.json({ tab_switches: (tabCount as number) || 0 });
 });
 
 export default router;

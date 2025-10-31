@@ -8,6 +8,10 @@ import GroupsManagement from './users/GroupsManagement';
 import AssessmentManagement from './assessments/AssessmentManagement';
 import ResultsManagement from './assessments/ResultsManagement';
 import StudentAssessments from './student/StudentAssessments';
+import Notifications from './notifications/Notifications';
+import Settings from './settings/Settings';
+import QuestionBank from './qb/QuestionBank';
+import LiveMonitor from './assessments/LiveMonitor';
 
 export type Route =
   | 'dashboard'
@@ -18,7 +22,9 @@ export type Route =
   | 'results'
   | 'certificates'
   | 'notifications'
-  | 'settings';
+  | 'settings'
+  | 'qb'
+  | 'monitor';
 
 interface RouterProps {
   currentRoute: Route;
@@ -56,6 +62,23 @@ export default function Router({ currentRoute }: RouterProps) {
 
   if (currentRoute === 'results' && (user.role === 'super_admin' || user.role === 'admin')) {
     return <ResultsManagement />;
+  }
+  if (currentRoute === 'monitor' && (user.role === 'super_admin' || user.role === 'admin')) {
+    return <LiveMonitor />;
+  }
+
+  if (currentRoute === 'notifications') {
+    if (user.role === 'super_admin' || user.role === 'admin') return <Notifications />;
+    // students see their own notifications inside dashboard; fallback here if routed directly
+    return <div className="p-4">Open dashboard to view notifications.</div>;
+  }
+
+  if (currentRoute === 'settings' && (user.role === 'super_admin' || user.role === 'admin')) {
+    return <Settings />;
+  }
+
+  if (currentRoute === 'qb' && (user.role === 'super_admin' || user.role === 'admin')) {
+    return <QuestionBank />;
   }
 
   return <div className="text-center py-12 text-gray-500">Coming soon...</div>;

@@ -7,6 +7,8 @@ export interface EffectiveAssessmentSettings {
   end_at: string | null;
   duration_minutes: number | null;
   allowed_languages?: string[] | null;
+  disable_copy_paste?: boolean;
+  tab_switch_limit?: number | null;
 }
 
 export async function getEffectiveAssessmentSettings(assessmentId: string, userId: string): Promise<EffectiveAssessmentSettings | null> {
@@ -30,6 +32,8 @@ export async function getEffectiveAssessmentSettings(assessmentId: string, userI
     end_at: (o?.end_at as any) ?? (base.end_at as any) ?? null,
     duration_minutes: base.duration_minutes ?? null,
     allowed_languages: (o?.allowed_languages as any) ?? (base.allowed_languages as any) ?? null,
+    disable_copy_paste: base.disable_copy_paste ?? false,
+    tab_switch_limit: base.tab_switch_limit ?? null,
   };
   return eff;
 }

@@ -67,11 +67,33 @@ router.get('/', async (req, res) => {
   const role = req.user?.role;
   if (!(role === 'admin' || role === 'super_admin')) return res.status(403).json({ error: 'Forbidden' });
   const assessmentId = req.query.assessment_id as string | undefined;
+  const userId = req.query.user_id as string | undefined;
   let q = supabaseAdmin.from('submissions').select('*').order('created_at', { ascending: false });
   if (assessmentId) q = q.eq('assessment_id', assessmentId);
+  if (userId) q = q.eq('user_id', userId);
   const { data, error } = await q.limit(200);
   if (error) return res.status(500).json({ error: error.message });
   res.json(data || []);
+});
+
+// Latest submission for a specific user (admin)
+router.get('/user/latest', async (req, res) => {
+  const role = req.user?.role;
+  if (!(role === 'admin' || role === 'super_admin')) return res.status(403).json({ error: 'Forbidden' });
+  const assessment_id = req.query.assessment_id as string | undefined;
+  const user_id = req.query.user_id as string | undefined;
+  if (!assessment_id || !user_id) return res.status(400).json({ error: 'assessment_id and user_id required' });
+  const { data, error } = await supabaseAdmin
+    .from('submissions')
+    .select('*')
+    .eq('assessment_id', assessment_id)
+    .eq('user_id', user_id)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) return res.status(500).json({ error: error.message });
+  if (!data) return res.status(404).json({ error: 'No submissions' });
+  res.json(data);
 });
 
 router.get('/mine', async (req, res) => {
