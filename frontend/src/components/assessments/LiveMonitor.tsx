@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../../lib/api';
+import LiveMonitorDetail from './LiveMonitorDetail';
 
 export default function LiveMonitor() {
   const [courses, setCourses] = useState<Array<{ id: string; title: string }>>([]);
@@ -10,15 +11,15 @@ export default function LiveMonitor() {
   const [assessmentId, setAssessmentId] = useState('');
   const [data, setData] = useState<{ sessions: any[]; users: any[]; snapshots: any[] }|null>(null);
   const [q, setQ] = useState('');
+  const [selected, setSelected] = useState<{ sessionId: string; assessmentId: string }|null>(null);
 
   useEffect(()=>{ (async()=>{ setCourses(await api.get('/courses')); })(); }, []);
   useEffect(()=>{ (async()=>{ if (!courseId) { setModules([]); setModuleId(''); return; } setModules(await api.get(`/courses/${courseId}/modules`)); })(); }, [courseId]);
   useEffect(()=>{ (async()=>{ if (!moduleId) { setAssessments([]); setAssessmentId(''); return; } setAssessments(await api.get(`/assessments/modules/${moduleId}`)); })(); }, [moduleId]);
   useEffect(()=>{
-    let t: any;
     async function load(){ if (!assessmentId) { setData(null); return; } try { setData(await api.get(`/assessments/${assessmentId}/live`)); } catch { setData(null); } }
     load();
-    t = setInterval(load, 5000);
+    const t = setInterval(load, 5000);
     return ()=> clearInterval(t);
   }, [assessmentId]);
 
@@ -38,6 +39,10 @@ export default function LiveMonitor() {
     const hay = `${r.user?.full_name||''} ${r.user?.email||''}`.toLowerCase();
     return hay.includes(q.toLowerCase());
   });
+
+  if (selected) {
+    return <LiveMonitorDetail assessmentId={selected.assessmentId} sessionId={selected.sessionId} onBack={()=> setSelected(null)} />;
+  }
 
   return (
     <div>
@@ -73,7 +78,8 @@ export default function LiveMonitor() {
                     <td className="py-2 pr-3">{new Date(r.session.started_at).toLocaleString()}</td>
                     <td className="py-2 pr-3">{r.session.resume_count}</td>
                     <td className="py-2 pr-3 whitespace-pre-wrap text-xs">{r.snapshot?.code ? (r.snapshot.code.slice(0,200)+'…') : '—'}</td>
-                    <td className="py-2 pr-3 text-right">
+                    <td className="py-2 pr-3 text-right space-x-2">
+                      <button onClick={()=> setSelected({ assessmentId, sessionId: r.session.id })} className="px-2 py-1 border rounded">View</button>
                       <button onClick={async ()=>{ await api.post(`/assessments/${assessmentId}/sessions/${r.session.id}/force-submit`); }} className="px-2 py-1 border rounded">Force Submit</button>
                     </td>
                   </tr>

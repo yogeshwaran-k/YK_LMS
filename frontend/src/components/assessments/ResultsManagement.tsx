@@ -9,6 +9,8 @@ interface Submission { id: string; user_id: string; assessment_id: string; type:
 interface User { id: string; full_name: string; email: string }
 
 export default function ResultsManagement() {
+  const [tab, setTab] = useState<'results'|'reports'>('results');
+  const [search, setSearch] = useState('');
   const [courses, setCourses] = useState<Course[]>([]);
   const [modules, setModules] = useState<Module[]>([]);
   const [assessments, setAssessments] = useState<Assessment[]>([]);
@@ -35,11 +37,22 @@ export default function ResultsManagement() {
 
   return (
     <div>
-      <h1 className="text-2xl font-bold text-gray-900 mb-4">Results</h1>
-
-      <div className="mb-4 bg-white rounded p-3 border">
-        <StudentReportPanel users={users} />
+      <div className="mb-4 flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-gray-900">Results & Reports</h1>
+        <div className="flex items-center gap-2">
+          <input value={search} onChange={(e)=> setSearch(e.target.value)} placeholder="Search learner or assessment" className="border rounded px-2 py-1" />
+          <div className="inline-flex rounded border overflow-hidden">
+            <button className={`px-3 py-1 text-sm ${tab==='results'?'bg-blue-50 text-blue-700':'bg-white'}`} onClick={()=> setTab('results')}>Results</button>
+            <button className={`px-3 py-1 text-sm ${tab==='reports'?'bg-blue-50 text-blue-700':'bg-white'}`} onClick={()=> setTab('reports')}>Reports</button>
+          </div>
+        </div>
       </div>
+
+      {tab==='reports' && (
+        <div className="mb-4 bg-white rounded p-3 border">
+          <StudentReportPanel users={users} />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
         <div className="bg-white rounded p-3 border">
@@ -61,14 +74,17 @@ export default function ResultsManagement() {
         <div className="bg-white rounded p-3 border">
           <div className="font-semibold text-sm mb-2">Assessment</div>
           <div className="space-y-1 max-h-64 overflow-auto">
-            {assessments.map(a=> (
+            {assessments.filter(a=>{
+              if (!search.trim()) return true;
+              return a.title.toLowerCase().includes(search.toLowerCase());
+            }).map(a=> (
               <button key={a.id} onClick={()=> setSelectedAssessment(a)} className={`w-full text-left px-2 py-1 rounded ${selectedAssessment?.id===a.id?'bg-blue-50 text-blue-700':'hover:bg-gray-50'}`}>{a.title} <span className="text-xs text-gray-500">({a.type})</span></button>
             ))}
           </div>
         </div>
       </div>
 
-      {selectedAssessment && (
+      {tab==='results' && selectedAssessment && (
         <div className="bg-white rounded-lg shadow">
           <div className="px-4 py-3 border-b flex items-center justify-between">
             <div className="font-semibold">Learners for {selectedAssessment.title}</div>
@@ -109,6 +125,19 @@ export default function ResultsManagement() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {tab==='reports' && selectedCourse && (
+        <div className="bg-white rounded-lg shadow">
+          <div className="px-4 py-3 border-b flex items-center justify-between">
+            <div className="font-semibold">Exports for {selectedCourse.title}</div>
+            <div className="space-x-2 text-sm">
+              <a className="px-3 py-1.5 border rounded inline-block" href={`/reports/courses/${selectedCourse.id}.assessments.csv?is_practice=true`} target="_blank" rel="noreferrer">Download Practice CSV</a>
+              <a className="px-3 py-1.5 border rounded inline-block" href={`/reports/courses/${selectedCourse.id}.assessments.csv?is_practice=false`} target="_blank" rel="noreferrer">Download Tests CSV</a>
+            </div>
+          </div>
+          <div className="p-4 text-sm text-gray-600">Pick a course, then use the buttons above to export latest scores per user per assessment, split by Practice vs Tests.</div>
         </div>
       )}
     </div>

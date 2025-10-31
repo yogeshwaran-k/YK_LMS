@@ -48,6 +48,7 @@ router.post('/modules/:moduleId', requireRole('admin', 'super_admin'), async (re
     results_force_enabled: z.boolean().optional().default(false),
     disable_copy_paste: z.boolean().optional().default(false),
     tab_switch_limit: z.number().int().nonnegative().optional().nullable(),
+    is_practice: z.boolean().optional().default(false),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
@@ -401,6 +402,28 @@ router.get('/:assessmentId/live', requireRole('admin','super_admin'), async (req
   const { data: users } = await supabaseAdmin.from('users').select('id,full_name,email').in('id', userIds);
   const { data: snaps } = await supabaseAdmin.from('assessment_live_snapshots').select('*').eq('assessment_id', assessmentId);
   res.json({ sessions: sessions||[], users: users||[], snapshots: snaps||[] });
+});
+
+// Per-learner live detail (admin)
+router.get('/:assessmentId/sessions/:sessionId/live', requireRole('admin','super_admin'), async (req, res) => {
+  const { assessmentId, sessionId } = req.params as any;
+  // session
+  const { data: s } = await supabaseAdmin
+    .from('assessment_sessions')
+    .select('id,user_id,assessment_id,status,started_at,resume_count,last_resume_at')
+    .eq('id', sessionId)
+    .eq('assessment_id', assessmentId)
+    .maybeSingle();
+  if (!s) return res.status(404).json({ error: 'Session not found' });
+  const { data: u } = await supabaseAdmin.from('users').select('id,full_name,email').eq('id', (s as any).user_id).maybeSingle();
+  const { data: snap } = await supabaseAdmin.from('assessment_live_snapshots').select('*').eq('session_id', sessionId).maybeSingle();
+  // proctor summary
+  const { count: tabCount } = await (supabaseAdmin
+    .from('assessment_proctor_events')
+    .select('id', { count: 'exact', head: true }) as any)
+    .eq('session_id', sessionId)
+    .eq('event_type', 'tab_switch');
+  res.json({ session: s, user: u, snapshot: snap || null, proctor: { tab_switches: (tabCount as number) || 0 } });
 });
 
 // Force submit (admin)

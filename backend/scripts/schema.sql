@@ -26,6 +26,17 @@ create table if not exists notifications (
   body text not null,
   created_at timestamptz not null default now()
 );
+-- Safe alters in case table exists without expected columns
+alter table if exists notifications add column if not exists title text;
+alter table if exists notifications add column if not exists body text;
+alter table if exists notifications add column if not exists message text;
+alter table if exists notifications add column if not exists created_at timestamptz default now();
+-- Relax legacy NOT NULL on message if present
+do $$ begin
+  if exists (select 1 from information_schema.columns where table_name='notifications' and column_name='message') then
+    execute 'alter table notifications alter column message drop not null';
+  end if;
+end $$;
 
 -- Audit logs
 create table if not exists audit_logs (
@@ -73,6 +84,8 @@ alter table if exists assessments add column if not exists resume_limit integer 
 alter table if exists assessments add column if not exists show_results_immediately boolean default false;
 alter table if exists assessments add column if not exists results_release_at timestamptz;
 alter table if exists assessments add column if not exists results_force_enabled boolean default false;
+-- Practice vs Test split
+alter table if exists assessments add column if not exists is_practice boolean default false;
 -- Proctoring controls
 alter table if exists assessments add column if not exists disable_copy_paste boolean default false;
 alter table if exists assessments add column if not exists tab_switch_limit integer;

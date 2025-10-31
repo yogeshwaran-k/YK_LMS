@@ -132,7 +132,43 @@ router.get('/assessment/:assessmentId.csv', requireRole('admin','super_admin'), 
   const rows = userIds.map(uid => ({ name: (uMap.get(uid) as any)?.full_name || uid, email: (uMap.get(uid) as any)?.email || '', score: byUser.get(uid)?.score ?? '', attempted_at: byUser.get(uid)?.created_at || '' }));
   const csv = ['Name,Email,Score,AttemptedAt', ...rows.map(r=>`${wrap(r.name)},${wrap(r.email)},${r.score},${wrap(r.attempted_at)}`)].join('\n');
   res.setHeader('Content-Type', 'text/csv');
-  res.setHeader('Content-Disposition', `attachment; filename="assessment_${assessmentId}.csv"`);
+  res.setHeader('Content-Disposition', `attachment; filename=\"assessment_${assessmentId}.csv\"`);
+  res.send(csv);
+});
+
+// Course-wide latest scores per user per assessment, with practice/test split via query ?is_practice=true|false
+router.get('/courses/:courseId.assessments.csv', requireRole('admin','super_admin'), async (req, res) => {
+  const { courseId } = req.params as any;
+  const isPracticeParam = (req.query.is_practice as string | undefined);
+  const isPractice = typeof isPracticeParam === 'string' ? isPracticeParam === 'true' : undefined;
+  // Get assessments under course modules
+  const { data: mods } = await supabaseAdmin.from('modules').select('id').eq('course_id', courseId);
+  const modIds = (mods||[]).map((m:any)=>m.id);
+  if (!modIds.length) return res.send('Name,Email,AssessmentTitle,Type,IsPractice,Score,AttemptedAt');
+  let qa = supabaseAdmin.from('assessments').select('id,title,type,is_practice,module_id').in('module_id', modIds);
+  if (isPractice !== undefined) qa = (qa as any).eq('is_practice', isPractice);
+  const { data: assessments } = await qa;
+  const aIds = (assessments||[]).map((a:any)=>a.id);
+  if (!aIds.length) return res.send('Name,Email,AssessmentTitle,Type,IsPractice,Score,AttemptedAt');
+  const { data: subs } = await supabaseAdmin.from('submissions').select('user_id,assessment_id,score,created_at').in('assessment_id', aIds).order('created_at', { ascending: false });
+  // Latest per user per assessment
+  const latest: Record<string, any> = {};
+  for (const s of (subs||[])) {
+    const key = `${s.user_id}:${s.assessment_id}`;
+    if (!latest[key]) latest[key] = s;
+  }
+  const userIds = Array.from(new Set(Object.values(latest).map((s:any)=>s.user_id)));
+  const { data: users } = await supabaseAdmin.from('users').select('id,full_name,email').in('id', userIds);
+  const uMap = new Map((users||[]).map(u=>[u.id,u]));
+  const aMap = new Map((assessments||[]).map((a:any)=>[a.id,a]));
+  const rows = Object.values(latest).map((s:any)=>{
+    const u = uMap.get(s.user_id) as any; const a = aMap.get(s.assessment_id) as any;
+    return { name: u?.full_name || s.user_id, email: u?.email || '', assessment_title: a?.title || s.assessment_id, type: a?.type || '', is_practice: a?.is_practice ? 'true':'false', score: s.score ?? '', attempted_at: s.created_at };
+  });
+  const csv = ['Name,Email,AssessmentTitle,Type,IsPractice,Score,AttemptedAt', ...rows.map(r=>`${wrap(r.name)},${wrap(r.email)},${wrap(r.assessment_title)},${wrap(r.type)},${r.is_practice},${r.score},${wrap(r.attempted_at)}`)].join('\n');
+  res.setHeader('Content-Type', 'text/csv');
+  const suffix = isPractice === undefined ? 'all' : (isPractice ? 'practice' : 'tests');
+  res.setHeader('Content-Disposition', `attachment; filename=\"course_${courseId}_assessments_${suffix}.csv\"`);
   res.send(csv);
 });
 

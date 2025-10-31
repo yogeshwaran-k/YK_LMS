@@ -7,7 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "lint": "echo \"Add your linter here\"",
-    "seed:users": "node scripts/seed-users.js"
+    "seed:users": "node scripts/seed-users.js",
+    "seed:demo": "node scripts/seed-demo.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
