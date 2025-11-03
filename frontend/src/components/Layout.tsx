@@ -1,5 +1,6 @@
-import { ReactNode, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import { api } from '../lib/api';
 import {
   LogOut,
   Menu,
@@ -10,7 +11,6 @@ import {
   Settings,
   FileText,
   Bell,
-  Award,
   CheckCircle,
   Code
 } from 'lucide-react';
@@ -36,7 +36,6 @@ export default function Layout({ children, currentRoute, onNavigate }: LayoutPro
     { name: 'Assessments', icon: FileText, route: 'assessments', roles: ['super_admin', 'admin', 'student'] },
     { name: 'Results', icon: CheckCircle, route: 'results', roles: ['super_admin', 'admin'] },
     { name: 'Live Monitor', icon: Code, route: 'monitor', roles: ['super_admin', 'admin'] },
-    { name: 'Certificates', icon: Award, route: 'certificates', roles: ['super_admin', 'admin', 'student'] },
     { name: 'Notifications', icon: Bell, route: 'notifications', roles: ['super_admin', 'admin', 'student'] },
     { name: 'Question Bank', icon: FileText, route: 'qb', roles: ['super_admin', 'admin'] },
     { name: 'Settings', icon: Settings, route: 'settings', roles: ['super_admin', 'admin'] },
@@ -50,6 +49,32 @@ export default function Layout({ children, currentRoute, onNavigate }: LayoutPro
     onNavigate(route);
     setSidebarOpen(false);
   }
+
+  const [unread, setUnread] = useState(0);
+  useEffect(()=>{
+    function onLocalUpdate(e: any){ if (typeof e?.detail === 'number') setUnread(e.detail); }
+    window.addEventListener('notify:unread', onLocalUpdate as any);
+    let t: any;
+    async function load(){ try { const u = await api.get<{count:number}>('/notifications/unread-count'); setUnread(u.count||0); } catch {} }
+    load();
+    t = setInterval(load, 2000);
+    const vis = () => { if (!document.hidden) load(); };
+    document.addEventListener('visibilitychange', vis);
+    return ()=> { clearInterval(t); window.removeEventListener('notify:unread', onLocalUpdate as any); document.removeEventListener('visibilitychange', vis); };
+  }, [currentRoute]);
+
+  // SSE subscription for instant badge updates
+  useEffect(()=>{
+    const token = sessionStorage.getItem('lms_token');
+    if (!token) return;
+    const base = (import.meta.env.VITE_API_BASE_URL as string) || 'http://localhost:4000';
+    const es = new EventSource(`${base}/notifications/stream?token=${encodeURIComponent(token)}`);
+    const onUnread = (e: MessageEvent) => { try { const d = JSON.parse(e.data||'{}'); if (typeof d.count === 'number') setUnread(d.count); } catch {} };
+    const onNew = (_e: MessageEvent) => { setUnread((u)=> u+1); };
+    es.addEventListener('unread', onUnread as any);
+    es.addEventListener('new', onNew as any);
+    return ()=> { es.close(); };
+  }, []);
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -94,7 +119,7 @@ export default function Layout({ children, currentRoute, onNavigate }: LayoutPro
                     }`}
                   >
                     <item.icon className="w-5 h-5" />
-                    <span className="font-medium">{item.name}</span>
+                    <span className="font-medium">{item.name}{item.route==='notifications' && unread>0 ? (<span className="ml-2 inline-flex items-center justify-center px-1.5 py-0.5 text-[10px] font-semibold rounded-full bg-red-600 text-white">{unread}</span>) : null}</span>
                   </button>
                 ))}
               </nav>

@@ -27,6 +27,8 @@ function MCQRunner({ assessment, onBack, analysis }: { assessment: Assessment & 
   const [disableCP, setDisableCP] = useState(false);
   const [tabLimit, setTabLimit] = useState<number | null>(null);
   const [tabUsed, setTabUsed] = useState(0);
+  // Modal MUST be defined unconditionally before any early returns
+  const [modal, setModal] = useState<{ open: boolean; title: string; body: string; onClose?: ()=>void }>({ open: false, title: '', body: '' });
 
   // 15s warmup timebar overlay
   const [warmup, setWarmup] = useState<{ active: boolean; progress: number }>({ active: !analysis, progress: 0 });
@@ -66,29 +68,20 @@ function MCQRunner({ assessment, onBack, analysis }: { assessment: Assessment & 
         setTabUsed(e.proctor.tab_switch_used || 0);
       }
       if (!e.eligible) {
-        // If resume exceeded but attempts remain, start a new attempt automatically
-        if (reasons.includes('resume_count_exceeded') && e.attempts && e.attempts.used < e.attempts.allowed) {
-          const s = await api.post<any>(`/assessments/${assessment.id}/start`).catch(()=>null);
-          if (s?.id) {
-            setSessionId(s.id);
-            setTimeLeft(Math.max(1, (assessment as any).duration_minutes || 60) * 60);
-            startedAt.current = Date.now();
+        // Try start-or-resume to clear stale sessions or resume when possible
+        try {
+          const sor = await api.post<any>(`/assessments/${assessment.id}/start-or-resume`);
+          const e2 = await api.get<any>(`/assessments/${assessment.id}/eligibility`).catch(()=>null);
+          const sess = sor?.session_id || e2?.session_id || null;
+          if (sess) {
+            setSessionId(sess);
+            const remaining = e2?.remaining_seconds ?? (((assessment as any).duration_minutes||60)*60);
+            setTimeLeft(remaining);
+            startedAt.current = Date.now() - ((((assessment as any).duration_minutes||60)*60) - remaining)*1000;
           } else {
-            const map: Record<string,string> = {
-              before_start: 'Start Time is at',
-              after_end: 'The End has end at',
-              attempts_exhausted: 'Attempts Exhausted',
-              resume_count_exceeded: 'Resume Count Exceeded',
-              time_frame_expired: 'Time frame expired',
-              active_session_exists: 'Active session exists',
-              not_found: 'Not eligible',
-            };
-            setEligibilityMsg(reasons.map(r=>map[r]||r).join(' | ') || 'Not eligible');
-            setView('ineligible');
-            clearInterval(timer); setWarmup({ active: false, progress: 100 });
-            return;
+            throw new Error('Not eligible');
           }
-        } else {
+        } catch {
           const map: Record<string,string> = {
             before_start: 'Start Time is at',
             after_end: 'The End has end at',
@@ -291,7 +284,6 @@ function MCQRunner({ assessment, onBack, analysis }: { assessment: Assessment & 
 
   const q = questions[idx];
   // Simple modal component
-  const [modal, setModal] = useState<{ open: boolean; title: string; body: string; onClose?: ()=>void }>({ open: false, title: '', body: '' });
 
   return (
     <div>

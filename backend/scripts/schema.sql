@@ -2,6 +2,7 @@
 
 -- Publish flag on courses
 alter table if exists courses add column if not exists is_published boolean default true;
+alter table if exists courses add column if not exists push_on_assign boolean default false;
 
 -- Course assignments
 create table if not exists course_assignments (
@@ -24,13 +25,15 @@ create table if not exists notifications (
   user_id uuid references users(id) on delete cascade,
   title text not null,
   body text not null,
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  read_at timestamptz
 );
 -- Safe alters in case table exists without expected columns
 alter table if exists notifications add column if not exists title text;
 alter table if exists notifications add column if not exists body text;
 alter table if exists notifications add column if not exists message text;
 alter table if exists notifications add column if not exists created_at timestamptz default now();
+alter table if exists notifications add column if not exists read_at timestamptz;
 -- Relax legacy NOT NULL on message if present
 do $$ begin
   if exists (select 1 from information_schema.columns where table_name='notifications' and column_name='message') then
@@ -75,6 +78,8 @@ alter table if exists assessments add column if not exists randomize_questions b
 alter table if exists assessments add column if not exists enable_negative_marking boolean default false;
 alter table if exists assessments add column if not exists negative_marks_per_question numeric default 0;
 alter table if exists assessments add column if not exists allowed_languages text[];
+alter table if exists assessments add column if not exists push_on_assign boolean default false;
+alter table if exists assessments add column if not exists eligibility_min_seconds integer default 0;
 
 -- Scheduling, limits, and analysis controls
 alter table if exists assessments add column if not exists start_at timestamptz;

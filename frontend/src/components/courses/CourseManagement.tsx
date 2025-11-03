@@ -12,6 +12,7 @@ interface Course {
   is_published: boolean;
   enable_certificates: boolean;
   enable_gamification: boolean;
+  push_on_assign?: boolean;
   created_at: string;
 }
 
@@ -237,6 +238,7 @@ function CourseModal({ course, onClose, onSuccess }: CourseModalProps) {
     is_published: course?.is_published ?? false,
     enable_certificates: course?.enable_certificates ?? false,
     enable_gamification: course?.enable_gamification ?? false,
+    push_on_assign: course?.push_on_assign ?? false,
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -356,6 +358,19 @@ function CourseModal({ course, onClose, onSuccess }: CourseModalProps) {
               />
               <label htmlFor="enable_gamification" className="ml-2 block text-sm text-gray-700">
                 Enable gamification
+              </label>
+            </div>
+
+            <div className="flex items-center">
+              <input
+                type="checkbox"
+                id="push_on_assign"
+                checked={(formData as any).push_on_assign}
+                onChange={(e) => setFormData({ ...formData, push_on_assign: e.target.checked } as any)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <label htmlFor="push_on_assign" className="ml-2 block text-sm text-gray-700">
+                Push notification to all students on publish
               </label>
             </div>
           </div>

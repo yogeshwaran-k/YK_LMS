@@ -48,6 +48,7 @@ router.post('/', requireRole('admin', 'super_admin'), async (req, res) => {
     is_published: z.boolean().optional().default(false),
     enable_certificates: z.boolean().optional().default(false),
     enable_gamification: z.boolean().optional().default(false),
+    push_on_assign: z.boolean().optional().default(false),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
@@ -73,6 +74,18 @@ router.post('/', requireRole('admin', 'super_admin'), async (req, res) => {
     error = retry.error;
   }
   if (error) return res.status(500).json({ error: error.message });
+  // Broadcast to all active students if requested and published
+  if ((payload as any).push_on_assign && (payload as any).is_published) {
+    const { data: students } = await supabaseAdmin.from('users').select('id').eq('role','student').eq('is_active', true);
+    const userIds = (students||[]).map((u:any)=>u.id);
+    if (userIds.length) {
+      const title = 'New Course Published';
+      const body = `A new course is available: ${(data as any)?.title || payload.title}`;
+      await supabaseAdmin.from('notifications').insert(userIds.map(uid=>({ user_id: uid, title, body })));
+      const { pushNew, pushUnread } = await import('../events/notify');
+      for (const uid of userIds) { pushNew(uid, { title, body }); void pushUnread(uid); }
+    }
+  }
   res.status(201).json(data);
 });
 
@@ -85,6 +98,18 @@ router.put('/:courseId', requireRole('admin', 'super_admin'), async (req, res) =
     .select()
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
+  // If toggled to published and push flag set, notify all active students
+  if ((req.body?.push_on_assign || (data as any)?.push_on_assign) && (req.body?.is_published || (data as any)?.is_published)) {
+    const { data: students } = await supabaseAdmin.from('users').select('id').eq('role','student').eq('is_active', true);
+    const userIds = (students||[]).map((u:any)=>u.id);
+    if (userIds.length) {
+      const title = 'Course Published';
+      const body = `Course updated/published: ${(data as any)?.title || ''}`;
+      await supabaseAdmin.from('notifications').insert(userIds.map(uid=>({ user_id: uid, title, body })));
+      const { pushNew, pushUnread } = await import('../events/notify');
+      for (const uid of userIds) { pushNew(uid, { title, body }); void pushUnread(uid); }
+    }
+  }
   res.json(data);
 });
 

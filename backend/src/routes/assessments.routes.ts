@@ -49,6 +49,8 @@ router.post('/modules/:moduleId', requireRole('admin', 'super_admin'), async (re
     disable_copy_paste: z.boolean().optional().default(false),
     tab_switch_limit: z.number().int().nonnegative().optional().nullable(),
     is_practice: z.boolean().optional().default(false),
+    push_on_assign: z.boolean().optional().default(false),
+    eligibility_min_seconds: z.number().int().nonnegative().optional().default(0),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
@@ -59,6 +61,29 @@ router.post('/modules/:moduleId', requireRole('admin', 'super_admin'), async (re
     .select()
     .maybeSingle();
   if (error) return res.status(500).json({ error: error.message });
+  // Push notifications if enabled: notify all assigned learners of the course
+  if ((data as any)?.push_on_assign) {
+    const { data: mod } = await supabaseAdmin.from('modules').select('course_id').eq('id', moduleId).maybeSingle();
+    const courseId = (mod as any)?.course_id;
+    if (courseId) {
+      const { data: assigns } = await supabaseAdmin.from('course_assignments').select('user_id').eq('course_id', courseId);
+      const { data: groups } = await supabaseAdmin.from('course_group_assignments').select('group_id').eq('course_id', courseId);
+      let userIds = (assigns||[]).map((a:any)=>a.user_id);
+      const gIds = (groups||[]).map((g:any)=>g.group_id);
+      if (gIds.length) {
+        const { data: members } = await supabaseAdmin.from('group_members').select('user_id').in('group_id', gIds);
+        userIds = userIds.concat((members||[]).map((m:any)=>m.user_id));
+      }
+      userIds = Array.from(new Set(userIds));
+      if (userIds.length) {
+        const title = 'Assessment Assigned';
+        const body = `You have a new assessment: ${(data as any).title}`;
+        await supabaseAdmin.from('notifications').insert(userIds.map(uid => ({ user_id: uid, title, body })));
+        const { pushNew, pushUnread } = await import('../events/notify');
+        for (const uid of userIds) { pushNew(uid, { title, body }); void pushUnread(uid); }
+      }
+    }
+  }
   res.status(201).json(data);
 });
 
@@ -104,6 +129,22 @@ router.get('/:assessmentId/eligibility', async (req, res) => {
 
   const { getEffectiveAssessmentSettings, getUserAttemptCount, getActiveSession, withinWindow, remainingSeconds } = await import('../utils/assessments');
   const settings = await getEffectiveAssessmentSettings(assessmentId, userId);
+  // Eligibility: minimum course progress seconds
+  if (settings && (settings as any).eligibility_min_seconds && (settings as any).eligibility_min_seconds > 0) {
+    // compute total seconds across lessons in this course for this user
+    const courseId = await resolveCourseIdForAssessment(assessmentId);
+    if (courseId) {
+      const { data: modules } = await supabaseAdmin.from('modules').select('id').eq('course_id', courseId);
+      const mIds = (modules||[]).map((m:any)=>m.id);
+      const { data: lessons } = await supabaseAdmin.from('lessons').select('id').in('module_id', mIds);
+      const lIds = (lessons||[]).map((l:any)=>l.id);
+      const { data: progresses } = await supabaseAdmin.from('lesson_progress').select('total_seconds').eq('user_id', userId).in('lesson_id', lIds);
+      const totalSec = (progresses||[]).reduce((s:any,p:any)=> s + (p.total_seconds||0), 0);
+      if (totalSec < (settings as any).eligibility_min_seconds) {
+        return res.json({ eligible: false, reasons: ['eligibility_min_seconds'], attempts: { used: 0, allowed: settings.allowed_attempts ?? 1 }, resume: { used: 0, allowed: settings.resume_limit ?? 0 }, window: { start_at: settings.start_at, end_at: settings.end_at, now: new Date().toISOString() }, duration_minutes: settings.duration_minutes, can_start: false, can_resume: false, session_id: null, remaining_seconds: null, proctor: { disable_copy_paste: settings.disable_copy_paste ?? false, tab_switch_limit: settings.tab_switch_limit ?? null, tab_switch_used: 0 } });
+      }
+    }
+  }
   if (!settings) {
     return res.json({
       eligible: false,

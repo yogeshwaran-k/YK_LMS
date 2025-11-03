@@ -12,6 +12,7 @@ import Notifications from './notifications/Notifications';
 import Settings from './settings/Settings';
 import QuestionBank from './qb/QuestionBank';
 import LiveMonitor from './assessments/LiveMonitor';
+import StudentNotificationsPage from './notifications/StudentNotificationsPage';
 
 export type Route =
   | 'dashboard'
@@ -20,7 +21,6 @@ export type Route =
   | 'courses'
   | 'assessments'
   | 'results'
-  | 'certificates'
   | 'notifications'
   | 'settings'
   | 'qb'
@@ -69,8 +69,8 @@ export default function Router({ currentRoute }: RouterProps) {
 
   if (currentRoute === 'notifications') {
     if (user.role === 'super_admin' || user.role === 'admin') return <Notifications />;
-    // students see their own notifications inside dashboard; fallback here if routed directly
-    return <div className="p-4">Open dashboard to view notifications.</div>;
+    // student notifications page
+    return <StudentNotificationsPage />;
   }
 
   if (currentRoute === 'settings' && (user.role === 'super_admin' || user.role === 'admin')) {

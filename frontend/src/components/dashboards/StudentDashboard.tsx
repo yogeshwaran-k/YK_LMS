@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
-import { BookOpen, FileText, Award, TrendingUp, ChevronRight } from 'lucide-react';
+import { BookOpen, FileText, TrendingUp, ChevronRight } from 'lucide-react';
 
 interface Course { id: string; title: string; description: string; category: string; }
 
@@ -50,32 +50,33 @@ export default function StudentDashboard() {
     }
   })(); }, []);
 
-  const stats = [
-    {
-      name: 'Enrolled Courses',
-      value: '0',
-      icon: BookOpen,
-      color: 'bg-blue-500',
-    },
-    {
-      name: 'Pending Assessments',
-      value: '0',
-      icon: FileText,
-      color: 'bg-yellow-500',
-    },
-    {
-      name: 'Certificates Earned',
-      value: '0',
-      icon: Award,
-      color: 'bg-green-500',
-    },
-    {
-      name: 'Average Score',
-      value: '0%',
-      icon: TrendingUp,
-      color: 'bg-indigo-500',
-    },
-  ];
+  const [stats, setStats] = useState([
+    { name: 'Enrolled Courses', value: '0', icon: BookOpen, color: 'bg-blue-500' },
+    { name: 'Pending Assessments', value: '0', icon: FileText, color: 'bg-yellow-500' },
+    { name: 'Average Score', value: '0%', icon: TrendingUp, color: 'bg-indigo-500' },
+  ] as Array<{ name: string; value: string; icon: any; color: string }>);
+
+  useEffect(()=>{ (async()=>{
+    try {
+      // enrolled courses
+      setStats(s=> s.map(it => it.name==='Enrolled Courses' ? { ...it, value: String(courses.length) } : it));
+      // pending assessments and average score
+      let pending = 0; let totalScores = 0; let scoreCount = 0;
+      for (const c of courses) {
+        const mods = await api.get<any[]>(`/courses/${c.id}/modules`).catch(()=>[] as any[]);
+        for (const m of mods) {
+          const as = await api.get<any[]>(`/assessments/modules/${m.id}`).catch(()=>[] as any[]);
+          for (const a of as) {
+            const e = await api.get<any>(`/assessments/${a.id}/eligibility`).catch(()=>null);
+            if (e?.can_start || e?.can_resume) pending++;
+            const mine = await api.get<{ count:number; latest?: { score: number|null } }>(`/submissions/mine?assessment_id=${a.id}`).catch(()=>({ count:0, latest:null } as any));
+            if (mine?.latest?.score != null) { totalScores += Number(mine.latest.score); scoreCount++; }
+          }
+        }
+      }
+      setStats(s => s.map(it => it.name==='Pending Assessments' ? { ...it, value: String(pending) } : it.name==='Average Score' ? { ...it, value: (scoreCount? Math.round((totalScores/scoreCount)) : 0) + '%' } : it));
+    } catch {}
+  })(); }, [courses.length]);
 
   if (selected) {
     return <StudentCourseView course={selected} onBack={() => setSelected(null)} />;
