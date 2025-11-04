@@ -610,55 +610,23 @@ function CodingRunner({ assessment, onBack }: { assessment: Assessment; onBack: 
                       setResultsOpen(true);
                       setIsRunning(false);
                     }} className="px-3 py-1.5 border rounded hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600 disabled:opacity-50">Run Test</button>
-<button disabled={isRunning || timeLeft===0} onClick={async ()=>{
+                    <button disabled={isRunning || timeLeft===0} onClick={async ()=>{
                       setIsRunning(true);
                       setResultsOpen(true);
-                      const samples = tests.filter(t=>!t.is_hidden);
-                      const hidden = tests.filter(t=>t.is_hidden);
-                      const rows: ResultRow[] = [];
-                      let passed = 0;
-                      for (let i=0;i<samples.length;i++) {
-                        const t = samples[i];
-                        const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin: t.input, assessment_id: assessment.id });
-                        const out = (res.stdout || '').trim();
-                        const exp = (t.expected_output || '').trim();
-                        const ok = out === exp; if (ok) passed++;
-                        rows.push({ idx: i+1, status: ok ? 'Pass' : 'Fail', expected: exp, actual: out, kind: 'sample', test_case_id: t.id, weightage: t.weightage });
-                      }
-                      for (let i=0;i<hidden.length;i++) {
-                        const t = hidden[i];
-                        const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin: t.input, assessment_id: assessment.id });
-                        const out = (res.stdout || '').trim();
-                        const exp = (t.expected_output || '').trim();
-                        const ok = out === exp; if (ok) passed++;
-                        rows.push({ idx: samples.length + i + 1, status: ok ? 'Pass' : 'Fail', expected: exp, actual: out, kind: 'hidden', test_case_id: t.id, weightage: t.weightage });
-                      }
-                      setRunSummary({ passed, total: samples.length + hidden.length });
-                      setResultsRows(rows);
-                      setLastSubmitRows(rows);
+                      // Evaluate on server (includes hidden)
+                      const evalRes = await api.post<{ passed:number; total:number; rows: ResultRow[] }>(`/assessments/coding-questions/${selected!.id}/evaluate`, { code, language });
+                      setRunSummary({ passed: evalRes.passed, total: evalRes.total });
+                      setResultsRows(evalRes.rows as any);
+                      setLastSubmitRows(evalRes.rows as any);
                       setResultsOpen(true);
                       setIsRunning(false);
                     }} className="px-3 py-1.5 border rounded hover:bg-gray-50 dark:hover:bg-gray-700 dark:border-gray-600 disabled:opacity-50">Submit Project</button>
                     <button onClick={async ()=>{
-                      // If no full run yet, run all (samples + hidden) before submit
-                      let rows = lastSubmitRows;
-                      if (!rows) {
-                        const samples = tests.filter(t=>!t.is_hidden);
-                        const hidden = tests.filter(t=>t.is_hidden);
-                        const all: typeof tests = [...samples, ...hidden];
-                        const tmp: any[] = [];
-                        for (let i=0;i<all.length;i++) {
-                          const t = all[i];
-                          const res = await api.post<{ stdout: string }>(`/runner/execute`, { language, code, stdin: t.input, assessment_id: assessment.id });
-                          const out = (res.stdout || '').trim();
-                          const exp = (t.expected_output || '').trim();
-                          const ok = out === exp;
-                          tmp.push({ idx: i+1, status: ok ? 'Pass' : 'Fail', expected: exp, actual: out, kind: t.is_hidden?'hidden':'sample', test_case_id: t.id, weightage: t.weightage });
-                        }
-                        rows = tmp as any;
-                        setLastSubmitRows(rows);
-                      }
-                      const score = (rows||[]).filter(r=>r.status==='Pass').length;
+                      // Server-side evaluate (includes hidden tests)
+                      const evalRes = await api.post<{ passed:number; total:number; rows:any[] }>(`/assessments/coding-questions/${selected!.id}/evaluate`, { code, language });
+                      const rows = evalRes.rows || [];
+                      setLastSubmitRows(rows);
+                      const score = rows.filter((r:any)=>r.status==='Pass').length;
                       await api.post(`/assessments/${assessment.id}/sessions/${sessionIdRef.current}/live`, { code, last_report: rows });
                       await api.post('/submissions', { assessment_id: assessment.id, type: 'coding', payload: { code, language, report: rows }, score, started_at: startedAt.current ? new Date(startedAt.current).toISOString(): undefined, elapsed_seconds: startedAt.current ? Math.round((Date.now()-(startedAt.current))/1000) : undefined, question_ids: questions.map(q=>q.id) });
                       if (sessionIdRef.current) await api.post(`/assessments/${assessment.id}/sessions/${sessionIdRef.current}/finish`);

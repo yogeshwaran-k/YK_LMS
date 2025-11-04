@@ -1,15 +1,29 @@
-import { useEffect, useMemo, useState } from 'react';
-import SimpleEditor from './SimpleCodeEditor';
+import { useEffect, useMemo } from 'react';
+import AceEditor from 'react-ace';
+
+// Import required modes and theme
+import 'ace-builds/src-noconflict/mode-javascript';
+import 'ace-builds/src-noconflict/mode-python';
+import 'ace-builds/src-noconflict/mode-c_cpp';
+import 'ace-builds/src-noconflict/mode-java';
+import 'ace-builds/src-noconflict/theme-monokai';
 
 interface AceCodeEditorProps {
   value: string;
   onChange: (code: string) => void;
-  language: 'javascript'|'typescript'|'python'|'c'|'cpp'|'java';
+  language: 'javascript' | 'typescript' | 'python' | 'c' | 'cpp' | 'java';
   onSave?: () => void;
   height?: string;
 }
 
-export default function AceCodeEditor({ value, onChange, language, onSave, height = '320px' }: AceCodeEditorProps) {
+export default function AceCodeEditor({
+  value,
+  onChange,
+  language,
+  onSave,
+  height = '320px',
+}: AceCodeEditorProps) {
+  // Determine the mode for Ace
   const mode = useMemo(() => {
     if (language === 'javascript' || language === 'typescript') return 'javascript';
     if (language === 'python') return 'python';
@@ -17,30 +31,7 @@ export default function AceCodeEditor({ value, onChange, language, onSave, heigh
     return 'c_cpp';
   }, [language]);
 
-  const [AceComp, setAceComp] = useState<any>(null);
-
-  useEffect(() => {
-    const enabled = typeof window !== 'undefined' && (window as any).__ACE_ENABLED === true;
-    if (!enabled) return;
-    (async () => {
-      try {
-        const acePkg = 'react' + '-ace';
-        const mod = await import(/* @vite-ignore */ (acePkg as any));
-        const base = 'ace-builds/src-noconflict/';
-        await Promise.all([
-          import(/* @vite-ignore */ (base + 'mode-javascript') as any),
-          import(/* @vite-ignore */ (base + 'mode-python') as any),
-          import(/* @vite-ignore */ (base + 'mode-c_cpp') as any),
-          import(/* @vite-ignore */ (base + 'mode-java') as any),
-          import(/* @vite-ignore */ (base + 'theme-monokai') as any),
-        ]);
-        setAceComp((mod as any).default || (mod as any));
-      } catch {
-        setAceComp(null);
-      }
-    })();
-  }, []);
-
+  // Keyboard shortcut for save
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
@@ -52,17 +43,13 @@ export default function AceCodeEditor({ value, onChange, language, onSave, heigh
     return () => window.removeEventListener('keydown', handler);
   }, [onSave]);
 
-  if (!AceComp) {
-    return <SimpleEditor value={value} onChange={onChange} placeholder="Write code here..." onSave={onSave} />;
-  }
-
-  const AceEditor = AceComp;
   return (
     <AceEditor
       mode={mode}
       theme="monokai"
       width="100%"
       height={height}
+      fontSize={14}
       value={value}
       onChange={(v: string) => onChange(v)}
       setOptions={{
