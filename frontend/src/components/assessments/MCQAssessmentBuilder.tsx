@@ -12,6 +12,7 @@ import {
   X,
   Eye,
   EyeOff,
+  ChevronDown,
 } from 'lucide-react';
 import BulkUpload from './MCQBulkUpload';
 import ReactQuill from 'react-quill';
@@ -81,6 +82,10 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
   const [searchTerm, setSearchTerm] = useState('');
   const [filterDifficulty, setFilterDifficulty] = useState<string>('all');
   const [showAnswers, setShowAnswers] = useState(false);
+  
+  // New State for Selection
+  const [selectedQuestions, setSelectedQuestions] = useState<string[]>([]);
+  const [showBulkActions, setShowBulkActions] = useState(false);
 
   // Question Bank
   const [banks, setBanks] = useState<{ id: string; name: string }[]>([]);
@@ -107,6 +112,7 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
     try {
       const data = await api.get<MCQQuestion[]>(`/assessments/${assessment.id}/mcq-questions`);
       setQuestions(data);
+      setSelectedQuestions([]); // Clear selection on refresh
     } finally {
       setLoading(false);
     }
@@ -154,6 +160,59 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
     }
   }
 
+  // Bulk Selection Handlers
+  const handleSelectQuestion = (id: string, isChecked: boolean) => {
+    setSelectedQuestions((prev) =>
+      isChecked ? [...prev, id] : prev.filter((qId) => qId !== id)
+    );
+  };
+
+  const handleSelectAll = (isChecked: boolean) => {
+    if (isChecked) {
+      setSelectedQuestions(filteredQuestions.map((q) => q.id));
+    } else {
+      setSelectedQuestions([]);
+    }
+  };
+
+  const isAllSelected = selectedQuestions.length > 0 && selectedQuestions.length === filteredQuestions.length;
+  const isAnySelected = selectedQuestions.length > 0;
+
+  // Bulk Actions
+  async function handleBulkDelete() {
+    if (!isAnySelected) return;
+    if (!window.confirm(`Delete ${selectedQuestions.length} selected questions permanently?`)) return;
+
+    try {
+      setLoading(true);
+      // NOTE: This assumes your API supports a bulk delete endpoint.
+      // If not, you'd need to loop through and delete them one by one.
+      await api.post(`/assessments/mcq-questions/bulk-delete`, { ids: selectedQuestions });
+      fetchQuestions();
+      setShowBulkActions(false);
+    } catch (err) {
+      alert('Failed to bulk delete questions.');
+      setLoading(false);
+    }
+  }
+
+  async function handleBulkClone() {
+    if (!isAnySelected) return;
+    if (!window.confirm(`Clone ${selectedQuestions.length} selected questions? (New copies will be added)`)) return;
+
+    try {
+      setLoading(true);
+      // NOTE: This assumes your API supports a bulk clone endpoint.
+      await api.post(`/assessments/${assessment.id}/mcq-questions/bulk-clone`, { ids: selectedQuestions });
+      fetchQuestions();
+      setShowBulkActions(false);
+    } catch (err) {
+      alert('Failed to bulk clone questions.');
+      setLoading(false);
+    }
+  }
+
+
   return (
     <div className="min-h-screen bg-gray-50 py-8">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -173,11 +232,11 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
             <div className="flex items-center gap-3 text-sm text-gray-600">
               <span className="flex items-center gap-1">
                 <CheckCircle className="w-4 h-4 text-green-600" />
-                {questions.length} Questions
+                **{questions.length}** Questions
               </span>
               <span className="text-gray-400">|</span>
               <span>
-                {questions.reduce((sum, q) => sum + q.marks, 0)} Total Marks
+                **{questions.reduce((sum, q) => sum + q.marks, 0)}** Total Marks
               </span>
             </div>
           </div>
@@ -197,6 +256,35 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
               </button>
               <BulkUpload assessmentId={assessment.id} onDone={fetchQuestions} />
             </div>
+
+            {/* Bulk Actions Dropdown */}
+            {isAnySelected && (
+                <div className="relative">
+                    <button
+                        onClick={() => setShowBulkActions(!showBulkActions)}
+                        className="flex items-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-800 px-4 py-2 rounded-lg font-medium transition shadow-sm border border-gray-300"
+                    >
+                        Bulk Actions ({selectedQuestions.length}) <ChevronDown className="w-4 h-4" />
+                    </button>
+                    {showBulkActions && (
+                        <div className="absolute top-full mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 z-10">
+                            <button
+                                onClick={() => { handleBulkClone(); setShowBulkActions(false); }}
+                                className="flex items-center gap-2 w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-indigo-50 hover:text-indigo-600 rounded-t-lg"
+                            >
+                                <Copy className="w-4 h-4" /> Clone Selected
+                            </button>
+                            <button
+                                onClick={() => { handleBulkDelete(); setShowBulkActions(false); }}
+                                className="flex items-center gap-2 w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 rounded-b-lg"
+                            >
+                                <Trash2 className="w-4 h-4" /> Delete Selected
+                            </button>
+                        </div>
+                    )}
+                </div>
+            )}
+
 
             <div className="flex-1" />
 
@@ -328,6 +416,20 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
           </div>
         ) : (
           <div className="space-y-4">
+            {/* Select All Checkbox */}
+            <div className="flex items-center gap-2 p-3 bg-gray-100 border border-gray-200 rounded-lg">
+                <input
+                    type="checkbox"
+                    checked={isAllSelected}
+                    onChange={(e) => handleSelectAll(e.target.checked)}
+                    className="w-4 h-4 text-indigo-600 rounded"
+                    disabled={filteredQuestions.length === 0}
+                />
+                <label className="text-sm font-medium text-gray-700">
+                    Select All ({selectedQuestions.length}/{filteredQuestions.length})
+                </label>
+            </div>
+            {/* Question Map */}
             {filteredQuestions.map((question, index) => {
               const difficultyColor =
                 question.difficulty === 'easy'
@@ -339,9 +441,22 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
               return (
                 <div
                   key={question.id}
-                  className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow"
+                  className={`bg-white rounded-xl shadow-sm border p-6 hover:shadow-md transition-shadow ${
+                    selectedQuestions.includes(question.id) ? 'border-2 border-indigo-400' : 'border-gray-200'
+                  }`}
                 >
                   <div className="flex items-start justify-between gap-4">
+                    
+                    {/* Selection Checkbox */}
+                    <div className="pt-1 pr-3 flex-shrink-0">
+                        <input
+                            type="checkbox"
+                            checked={selectedQuestions.includes(question.id)}
+                            onChange={(e) => handleSelectQuestion(question.id, e.target.checked)}
+                            className="w-4 h-4 text-indigo-600 rounded"
+                        />
+                    </div>
+                    
                     <div className="flex-1">
                       {/* Header */}
                       <div className="flex items-center gap-3 mb-3">
@@ -361,7 +476,7 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
                           </span>
                         )}
                         <span className="text-xs font-medium text-gray-500 ml-auto">
-                          {question.marks} {question.marks === 1 ? 'mark' : 'marks'}
+                          **{question.marks}** {question.marks === 1 ? 'mark' : 'marks'}
                         </span>
                       </div>
 
@@ -412,7 +527,7 @@ export default function MCQAssessmentBuilder({ assessment, onBack }: MCQAssessme
                     </div>
 
                     {/* Actions */}
-                    <div className="flex gap-1.5">
+                    <div className="flex gap-1.5 flex-shrink-0">
                       <button
                         onClick={() => openEditModal(question)}
                         className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg transition"
@@ -491,8 +606,10 @@ function MCQQuestionModal({ assessmentId, question, onClose, onSuccess }: MCQQue
 
     try {
       const payload: any = { ...formData };
+      // Delete empty optional fields to prevent sending empty strings/nulls to API if not needed
       if (!payload.topic) delete payload.topic;
       if (!payload.difficulty) delete payload.difficulty;
+      if (!payload.explanation) delete payload.explanation;
 
       if (question) {
         await api.put(`/assessments/mcq-questions/${question.id}`, payload);
@@ -559,8 +676,8 @@ function MCQQuestionModal({ assessmentId, question, onClose, onSuccess }: MCQQue
                     </label>
                   </div>
                   <RichTextEditor
-                    value={formData[`option_${opt}`]}
-                    onChange={(v) => setFormData({ ...formData, [`option_${opt}`]: v })}
+                    value={(formData as any)[`option_${opt}`]}
+                    onChange={(v) => setFormData({ ...formData, [`option_${opt}`]: v } as any)}
                     placeholder={`Enter option ${opt.toUpperCase()}...`}
                   />
                 </div>
@@ -584,7 +701,7 @@ function MCQQuestionModal({ assessmentId, question, onClose, onSuccess }: MCQQue
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Difficulty</label>
               <select
-                value={formData.difficulty}
+                value={formData.difficulty || ''}
                 onChange={(e) => setFormData({ ...formData, difficulty: e.target.value as any })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
               >
@@ -597,7 +714,7 @@ function MCQQuestionModal({ assessmentId, question, onClose, onSuccess }: MCQQue
               <label className="block text-sm font-medium text-gray-700 mb-1.5">Topic</label>
               <input
                 type="text"
-                value={formData.topic}
+                value={formData.topic || ''}
                 onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
                 className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500"
                 placeholder="e.g., React Hooks"
